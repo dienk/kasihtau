@@ -1,0 +1,60 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Notification {
+  id         String   @id @default(cuid())
+  appName    String   @default("Unknown")
+  title      String
+  message    String
+  prefix     String?
+  isRead     Boolean  @default(false)
+  isFiltered Boolean  @default(false)
+  isPushed   Boolean  @default(false)
+  pushStatus String   @default("pending") // pending, success, failed
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  pushLogs   PushLog[]
+}
+
+model FilterRule {
+  id        String   @id @default(cuid())
+  prefix    String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PushConfig {
+  id        String   @id @default(cuid())
+  url       String
+  method    String   @default("POST")
+  headers   String   @default("{}") // JSON string for custom headers
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  pushLogs  PushLog[]
+}
+
+model PushLog {
+  id             String   @id @default(cuid())
+  notificationId String
+  pushConfigId   String?
+  status         String   @default("pending") // pending, success, failed
+  requestBody    String   @default("{}") // JSON of what was sent
+  responseStatus Int?
+  responseBody   String?
+  errorMessage   String?
+  pushedAt       DateTime @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  pushConfig   PushConfig?  @relation(fields: [pushConfigId], references: [id], onDelete: SetNull)
+}
