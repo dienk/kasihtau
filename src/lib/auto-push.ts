@@ -2,7 +2,7 @@ import { db } from '@/lib/db'
 import { emitWsEvent } from './ws-client'
 
 /**
- * Auto-push a filtered notification to the active push config URL.
+ * Auto-push a filtered notification to ALL active push config URLs.
  * Called automatically when a notification matches a filter rule.
  * Also emits WebSocket events for real-time UI updates.
  */
@@ -22,12 +22,12 @@ export async function autoPushNotification(notification: {
     prefix: notification.prefix,
   })
 
-  // Get the active push config
-  const pushConfig = await db.pushConfig.findFirst({
+  // Get ALL active push configs
+  const pushConfigs = await db.pushConfig.findMany({
     where: { isActive: true },
   })
 
-  if (!pushConfig) {
+  if (pushConfigs.length === 0) {
     // No active push config - notification stays filtered but not pushed
     return { pushed: false, reason: 'no_active_config' }
   }
@@ -42,79 +42,85 @@ export async function autoPushNotification(notification: {
     timestamp: new Date().toISOString(),
   }
 
-  // Parse headers from config
-  let headers: Record<string, string> = {}
-  try {
-    headers = JSON.parse(pushConfig.headers || '{}')
-  } catch {
-    headers = {}
-  }
+  let anySuccess = false
+  let anyAttempt = false
 
-  const logData: {
-    notificationId: string
-    pushConfigId: string
-    status: string
-    requestBody: string
-    responseStatus?: number
-    responseBody?: string
-    errorMessage?: string
-  } = {
-    notificationId: notification.id,
-    pushConfigId: pushConfig.id,
-    status: 'pending',
-    requestBody: JSON.stringify(requestBody),
-  }
-
-  try {
-    const fetchOptions: RequestInit = {
-      method: pushConfig.method || 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
-      },
+  // Push to ALL active push configs
+  for (const pushConfig of pushConfigs) {
+    // Parse headers from config
+    let headers: Record<string, string> = {}
+    try {
+      headers = JSON.parse(pushConfig.headers || '{}')
+    } catch {
+      headers = {}
     }
 
-    if (pushConfig.method !== 'GET') {
-      fetchOptions.body = JSON.stringify(requestBody)
+    const logData: {
+      notificationId: string
+      pushConfigId: string
+      status: string
+      requestBody: string
+      responseStatus?: number
+      responseBody?: string
+      errorMessage?: string
+    } = {
+      notificationId: notification.id,
+      pushConfigId: pushConfig.id,
+      status: 'pending',
+      requestBody: JSON.stringify(requestBody),
     }
 
-    const response = await fetch(pushConfig.url, fetchOptions)
-    const responseText = await response.text()
+    anyAttempt = true
 
-    if (response.ok) {
-      logData.status = 'success'
-      logData.responseStatus = response.status
-      logData.responseBody = responseText.substring(0, 5000)
-
-      await db.notification.update({
-        where: { id: notification.id },
-        data: {
-          isPushed: true,
-          pushStatus: 'success',
+    try {
+      const fetchOptions: RequestInit = {
+        method: pushConfig.method || 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers,
         },
-      })
+      }
 
-      // Emit push success event
-      emitWsEvent('notification:pushed', {
-        id: notification.id,
-        title: notification.title,
-        prefix: notification.prefix,
-        pushUrl: pushConfig.url,
-        responseStatus: response.status,
-      })
+      if (pushConfig.method !== 'GET') {
+        fetchOptions.body = JSON.stringify(requestBody)
+      }
 
-      return { pushed: true, status: 'success', responseStatus: response.status }
-    } else {
+      const response = await fetch(pushConfig.url, fetchOptions)
+      const responseText = await response.text()
+
+      if (response.ok) {
+        logData.status = 'success'
+        logData.responseStatus = response.status
+        logData.responseBody = responseText.substring(0, 5000)
+        anySuccess = true
+
+        // Emit push success event
+        emitWsEvent('notification:pushed', {
+          id: notification.id,
+          title: notification.title,
+          prefix: notification.prefix,
+          pushUrl: pushConfig.url,
+          responseStatus: response.status,
+        })
+      } else {
+        logData.status = 'failed'
+        logData.responseStatus = response.status
+        logData.responseBody = responseText.substring(0, 5000)
+
+        // Emit push failed event
+        emitWsEvent('notification:push-failed', {
+          id: notification.id,
+          title: notification.title,
+          prefix: notification.prefix,
+          pushUrl: pushConfig.url,
+          responseStatus: response.status,
+          error: responseText.substring(0, 200),
+        })
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error'
       logData.status = 'failed'
-      logData.responseStatus = response.status
-      logData.responseBody = responseText.substring(0, 5000)
-
-      await db.notification.update({
-        where: { id: notification.id },
-        data: {
-          pushStatus: 'failed',
-        },
-      })
+      logData.errorMessage = errorMessage
 
       // Emit push failed event
       emitWsEvent('notification:push-failed', {
@@ -122,35 +128,34 @@ export async function autoPushNotification(notification: {
         title: notification.title,
         prefix: notification.prefix,
         pushUrl: pushConfig.url,
-        responseStatus: response.status,
-        error: responseText.substring(0, 200),
+        error: errorMessage,
       })
-
-      return { pushed: true, status: 'failed', responseStatus: response.status }
+    } finally {
+      await db.pushLog.create({ data: logData })
     }
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : 'Unknown error'
-    logData.status = 'failed'
-    logData.errorMessage = errorMessage
+  }
 
+  // Update the notification push status based on results
+  if (anySuccess) {
     await db.notification.update({
       where: { id: notification.id },
-        data: {
-          pushStatus: 'failed',
-        },
+      data: {
+        isPushed: true,
+        pushStatus: 'success',
+      },
     })
-
-    // Emit push failed event
-    emitWsEvent('notification:push-failed', {
-      id: notification.id,
-      title: notification.title,
-      prefix: notification.prefix,
-      pushUrl: pushConfig.url,
-      error: errorMessage,
+  } else if (anyAttempt) {
+    await db.notification.update({
+      where: { id: notification.id },
+      data: {
+        pushStatus: 'failed',
+      },
     })
+  }
 
-    return { pushed: true, status: 'failed', error: errorMessage }
-  } finally {
-    await db.pushLog.create({ data: logData })
+  return {
+    pushed: anyAttempt,
+    status: anySuccess ? 'success' : 'failed',
+    configsPushed: pushConfigs.length,
   }
 }
