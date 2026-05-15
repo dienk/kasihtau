@@ -57,6 +57,9 @@ server.log
 db/*.db
 db/*.db-journal
 
+# Supabase config (contains API keys)
+data/
+
 # Agent context
 /agent-ctx/
 

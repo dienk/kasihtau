@@ -18,6 +18,7 @@ interface SupabaseDbConfig {
   url: string
   anonKey: string
   isConfigured: boolean
+  tablesReady: boolean  // true when all required tables exist in Supabase
 }
 
 // In-memory config cache (avoids fs issues with bundlers)
@@ -44,7 +45,7 @@ function readConfig(): SupabaseDbConfig {
   } catch {
     // ignore
   }
-  return { url: '', anonKey: '', isConfigured: false }
+  return { url: '', anonKey: '', isConfigured: false, tablesReady: false }
 }
 
 function writeConfig(config: SupabaseDbConfig): void {
@@ -68,7 +69,7 @@ let lastConfigKey = ''
 function getSupabaseClient(): SupabaseClient | null {
   const config = readConfig()
 
-  if (!config.isConfigured || !config.url || !config.anonKey) {
+  if (!config.isConfigured || !config.url || !config.anonKey || !config.tablesReady) {
     return null
   }
 
@@ -82,6 +83,22 @@ function getSupabaseClient(): SupabaseClient | null {
   }
 
   return supabaseInstance
+}
+
+/**
+ * Get Supabase client even if tables aren't ready yet.
+ * Used by setup/verify endpoints to check table existence.
+ */
+function getSupabaseClientRaw(): SupabaseClient | null {
+  const config = readConfig()
+
+  if (!config.isConfigured || !config.url || !config.anonKey) {
+    return null
+  }
+
+  return createClient(config.url, config.anonKey, {
+    auth: { persistSession: false },
+  })
 }
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -329,11 +346,19 @@ CREATE TRIGGER airtable_configs_updated_at BEFORE UPDATE ON airtable_configs FOR
 // ─── Database Service ──────────────────────────────────────────────────────
 
 /**
- * Check if Supabase is configured and connected.
+ * Check if Supabase is configured (URL + key saved).
  */
 export function isSupabaseConfigured(): boolean {
   const config = readConfig()
   return config.isConfigured && !!config.url && !!config.anonKey
+}
+
+/**
+ * Check if Supabase is fully ready (configured + tables exist).
+ */
+export function isSupabaseReady(): boolean {
+  const config = readConfig()
+  return config.isConfigured && !!config.url && !!config.anonKey && config.tablesReady
 }
 
 /**
@@ -345,9 +370,11 @@ export function getSupabaseDbConfig(): SupabaseDbConfig {
 
 /**
  * Save Supabase configuration and test the connection.
+ * Also checks if tables exist and sets tablesReady accordingly.
  */
-export async function saveSupabaseDbConfig(url: string, anonKey: string): Promise<{ ok: boolean; error?: string }> {
+export async function saveSupabaseDbConfig(url: string, anonKey: string): Promise<{ ok: boolean; error?: string; tablesReady?: boolean }> {
   // Test the connection first
+  let tablesReady = false
   try {
     const testClient = createClient(url, anonKey, {
       auth: { persistSession: false },
@@ -359,14 +386,27 @@ export async function saveSupabaseDbConfig(url: string, anonKey: string): Promis
       .select('id')
       .limit(1)
 
-    // If table doesn't exist yet, that's OK - the connection still works
-    // We just need the Supabase URL and key to be valid
-    if (error && !error.message.includes('does not exist') && !error.message.includes('not found')) {
-      // Only fail on auth/connection errors, not missing table errors
+    if (error) {
+      // If table doesn't exist yet, that's OK - the connection still works
+      // We just need the Supabase URL and key to be valid
+      const isMissingTable =
+        error.message.includes('does not exist') ||
+        error.message.includes('not found') ||
+        error.message.includes('schema cache') ||
+        error.message.includes('relation') ||
+        error.code === 'PGRST205'
+
       const isAuthError = error.message.includes('JWT') || error.message.includes('apikey') || error.message.includes('Unauthorized')
       if (isAuthError) {
         return { ok: false, error: `Connection test failed: ${error.message}` }
       }
+      // Missing tables is OK — connection works, just not ready yet
+      if (!isMissingTable) {
+        // Some other error — could be network issue
+        console.warn('[SupabaseDB] Non-critical error during save:', error.message)
+      }
+    } else {
+      tablesReady = true
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error'
@@ -378,6 +418,7 @@ export async function saveSupabaseDbConfig(url: string, anonKey: string): Promis
     url,
     anonKey,
     isConfigured: true,
+    tablesReady,
   }
   writeConfig(config)
 
@@ -386,24 +427,36 @@ export async function saveSupabaseDbConfig(url: string, anonKey: string): Promis
   lastConfigUrl = ''
   lastConfigKey = ''
 
-  return { ok: true }
+  return { ok: true, tablesReady }
 }
 
 /**
  * Remove Supabase configuration (fall back to Prisma/SQLite).
  */
 export function removeSupabaseDbConfig(): void {
-  writeConfig({ url: '', anonKey: '', isConfigured: false })
+  writeConfig({ url: '', anonKey: '', isConfigured: false, tablesReady: false })
   supabaseInstance = null
   lastConfigUrl = ''
   lastConfigKey = ''
 }
 
 /**
- * Test the Supabase connection.
+ * Mark Supabase tables as ready (called after tables are verified to exist).
+ */
+export function markSupabaseTablesReady(ready: boolean): void {
+  const config = readConfig()
+  config.tablesReady = ready
+  writeConfig(config)
+  supabaseInstance = null
+  lastConfigUrl = ''
+  lastConfigKey = ''
+}
+
+/**
+ * Test the Supabase connection (uses raw client, bypasses tablesReady check).
  */
 export async function testSupabaseDbConnection(): Promise<{ ok: boolean; error?: string; tablesExist?: boolean }> {
-  const client = getSupabaseClient()
+  const client = getSupabaseClientRaw()
   if (!client) {
     return { ok: false, error: 'Supabase not configured' }
   }
@@ -416,7 +469,14 @@ export async function testSupabaseDbConnection(): Promise<{ ok: boolean; error?:
       .limit(1)
 
     if (error) {
-      if (error.message.includes('does not exist') || error.message.includes('not found') || error.message.includes('relation')) {
+      const isMissingTable =
+        error.message.includes('does not exist') ||
+        error.message.includes('not found') ||
+        error.message.includes('relation') ||
+        error.message.includes('schema cache') ||
+        error.code === 'PGRST205'
+
+      if (isMissingTable) {
         return { ok: true, tablesExist: false }
       }
       return { ok: false, error: error.message, tablesExist: false }

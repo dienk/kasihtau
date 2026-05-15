@@ -30,6 +30,7 @@ import {
   Radio,
   Database,
   Server,
+  Copy,
 } from 'lucide-react'
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -57,6 +58,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 
 // ─── Types (aligned with Prisma schema) ─────────────────────────────────────
 
@@ -200,12 +202,16 @@ export default function Home() {
     isActive: boolean
   } | null>(null)
   const [sbUrl, setSbUrl] = useState('')
-  const [sbAnonKey, setSbAnonKey] = useState('sb_publishable_a9GeIbcAeBuqx3bHZgHRiw_aXrLd8Ou')
+  const [sbAnonKey, setSbAnonKey] = useState('sb_publishable_u02JQcPqBnXCOGek5Hgm7g_8gI9fpMT')
   const [sbTesting, setSbTesting] = useState(false)
   const [sbSaving, setSbSaving] = useState(false)
   const [sbSetup, setSbSetup] = useState(false)
   const [dbStatus, setDbStatus] = useState<'supabase' | 'local' | 'unknown'>('unknown')
   const [sbSetupSql, setSbSetupSql] = useState<string | null>(null)
+  const [sbTablesExist, setSbTablesExist] = useState<boolean | null>(null)
+  const [sbSqlEditorLink, setSbSqlEditorLink] = useState<string | null>(null)
+  const [sbVerifying, setSbVerifying] = useState(false)
+  const [sbSqlExpanded, setSbSqlExpanded] = useState(false)
 
   // ── Data Fetching ──────────────────────────────────────────────────────
 
@@ -282,7 +288,14 @@ export default function Home() {
         if (data.length > 0) {
           setSupabaseConfig(data[0])
           setSbUrl(data[0].url)
-          setDbStatus('supabase')
+          // If tables are ready, we're using Supabase; otherwise still using local
+          if (data[0].tablesReady) {
+            setDbStatus('supabase')
+            setSbTablesExist(true)
+          } else {
+            setDbStatus('local')
+            setSbTablesExist(false)
+          }
         } else {
           setDbStatus('local')
         }
@@ -723,15 +736,23 @@ export default function Home() {
         }),
       })
       if (res.ok) {
-        toast.success(supabaseConfig ? 'Supabase config updated!' : 'Supabase connected!')
-        setSbAnonKey('sb_publishable_a9GeIbcAeBuqx3bHZgHRiw_aXrLd8Ou')
-        setDbStatus('supabase')
+        const data = await res.json().catch(() => ({}))
+        const isReady = data.tablesReady === true
+        toast.success(
+          isReady
+            ? (supabaseConfig ? 'Supabase config updated!' : 'Supabase connected and ready!')
+            : (supabaseConfig ? 'Supabase config updated! Tables still need setup.' : 'Supabase connected! Tables need to be created.')
+        )
+        setSbAnonKey('sb_publishable_u02JQcPqBnXCOGek5Hgm7g_8gI9fpMT')
+        setDbStatus(isReady ? 'supabase' : 'local')
         await fetchSupabaseConfig()
         // Refresh all data from the new database
         await fetchNotifications()
         await fetchFilterRules()
         await fetchPushConfigs()
         await fetchPushLogs()
+        // Check if tables exist after saving
+        await handleVerifySupabaseTables()
       } else {
         const data = await res.json().catch(() => ({}))
         toast.error(data.error || 'Failed to save Supabase config')
@@ -776,9 +797,13 @@ export default function Home() {
         if (data.ok && data.tablesExist) {
           toast.success('Supabase tables verified!')
           setSbSetupSql(null)
+          setSbTablesExist(true)
+          setSbSqlEditorLink(data.sqlEditorLink || null)
         } else if (data.ok && data.sql) {
           setSbSetupSql(data.sql)
-          toast.info('Tables need to be created. SQL shown below — run it in Supabase SQL Editor.')
+          setSbTablesExist(false)
+          setSbSqlEditorLink(data.sqlEditorLink || null)
+          toast.info('Tables need to be created. Copy the SQL and run it in Supabase SQL Editor.')
         } else {
           toast.error(`Setup issue: ${data.error || 'Unknown'}`)
         }
@@ -790,6 +815,80 @@ export default function Home() {
       toast.error('Failed to setup Supabase tables')
     } finally {
       setSbSetup(false)
+    }
+  }
+
+  const handleVerifySupabaseTables = async () => {
+    setSbVerifying(true)
+    try {
+      const res = await fetch('/api/settings/supabase/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.ok && data.tablesExist) {
+          setSbTablesExist(true)
+          setDbStatus('supabase')
+          setSbSetupSql(null)
+          toast.success('Database tables verified! Supabase is ready.')
+          // Refresh all data from Supabase
+          await fetchNotifications()
+          await fetchFilterRules()
+          await fetchPushConfigs()
+          await fetchPushLogs()
+        } else if (data.ok && !data.tablesExist) {
+          setSbTablesExist(false)
+          setDbStatus('local')
+          toast.info('Tables not found yet. Run the setup SQL first.')
+        } else {
+          setSbTablesExist(null)
+          toast.error(`Connection issue: ${data.error || 'Unknown'}`)
+        }
+      } else {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data.error || 'Failed to verify tables')
+      }
+    } catch {
+      toast.error('Failed to verify Supabase tables')
+    } finally {
+      setSbVerifying(false)
+    }
+  }
+
+  const handleCopySetupSql = async () => {
+    // Fetch the SQL if we don't have it yet
+    if (!sbSetupSql) {
+      try {
+        const res = await fetch('/api/settings/supabase/setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        })
+        if (res.ok) {
+          const data = await res.json()
+          if (data.sql) {
+            setSbSetupSql(data.sql)
+            if (data.sqlEditorLink) setSbSqlEditorLink(data.sqlEditorLink)
+            if (data.tablesExist) {
+              setSbTablesExist(true)
+              toast.info('Tables already exist!')
+              return
+            }
+          }
+        }
+      } catch {
+        toast.error('Failed to fetch setup SQL')
+        return
+      }
+    }
+
+    if (sbSetupSql) {
+      try {
+        await navigator.clipboard.writeText(sbSetupSql)
+        toast.success('Setup SQL copied to clipboard!')
+      } catch {
+        toast.error('Failed to copy SQL')
+      }
     }
   }
 
@@ -826,9 +925,11 @@ export default function Home() {
         toast.success('Supabase config deleted — using local database')
         setSupabaseConfig(null)
         setSbUrl('')
-        setSbAnonKey('sb_publishable_a9GeIbcAeBuqx3bHZgHRiw_aXrLd8Ou')
+        setSbAnonKey('sb_publishable_u02JQcPqBnXCOGek5Hgm7g_8gI9fpMT')
         setDbStatus('local')
         setSbSetupSql(null)
+        setSbTablesExist(null)
+        setSbSqlEditorLink(null)
         await fetchNotifications()
         await fetchFilterRules()
         await fetchPushConfigs()
@@ -1508,10 +1609,16 @@ export default function Home() {
                 <div className="flex items-center gap-2 mb-4">
                   <Server className="size-5 text-emerald-600" />
                   <h2 className="text-lg font-semibold">Supabase Database</h2>
-                  {dbStatus === 'supabase' && (
+                  {dbStatus === 'supabase' && sbTablesExist !== false && (
                     <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-xs gap-1">
                       <Zap className="size-3" />
                       Active
+                    </Badge>
+                  )}
+                  {dbStatus === 'supabase' && sbTablesExist === false && (
+                    <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-0 text-xs gap-1">
+                      <AlertCircle className="size-3" />
+                      Setup Required
                     </Badge>
                   )}
                   {dbStatus === 'local' && (
@@ -1524,6 +1631,65 @@ export default function Home() {
                 <p className="text-sm text-muted-foreground mb-4">
                   Use Supabase PostgreSQL as your primary database. All notifications, filter rules, push configs, and logs are stored in Supabase. When not connected, local SQLite is used as fallback.
                 </p>
+
+                {/* Database Setup Required Banner */}
+                {supabaseConfig && sbTablesExist === false && (
+                  <Alert className="mb-4 border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30">
+                    <AlertCircle className="size-4 text-amber-600" />
+                    <AlertTitle className="text-amber-800 dark:text-amber-300 text-sm font-semibold">Database Setup Required</AlertTitle>
+                    <AlertDescription className="text-amber-700 dark:text-amber-400 text-xs space-y-2">
+                      <p>Your Supabase project is connected but the required tables don&apos;t exist yet. You need to run the setup SQL in the Supabase SQL Editor to create them.</p>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleCopySetupSql}
+                          className="gap-1.5 border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 h-8"
+                        >
+                          <Copy className="size-3.5" />
+                          Copy Setup SQL
+                        </Button>
+                        {sbSqlEditorLink && (
+                          <a
+                            href={sbSqlEditorLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="gap-1.5 border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 h-8"
+                            >
+                              <ArrowUpRight className="size-3.5" />
+                              Open SQL Editor
+                            </Button>
+                          </a>
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleVerifySupabaseTables}
+                          disabled={sbVerifying}
+                          className="gap-1.5 border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 h-8"
+                        >
+                          <Check className={`size-3.5 ${sbVerifying ? 'animate-pulse' : ''}`} />
+                          Verify Tables
+                        </Button>
+                      </div>
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                {/* Tables Verified Banner */}
+                {supabaseConfig && sbTablesExist === true && (
+                  <Alert className="mb-4 border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30">
+                    <Check className="size-4 text-emerald-600" />
+                    <AlertTitle className="text-emerald-800 dark:text-emerald-300 text-sm font-semibold">Database Ready</AlertTitle>
+                    <AlertDescription className="text-emerald-700 dark:text-emerald-400 text-xs">
+                      All required tables exist in Supabase. Your data is being stored in PostgreSQL.
+                    </AlertDescription>
+                  </Alert>
+                )}
 
                 {/* Supabase Config Form */}
                 <Card className="py-0 gap-0 mb-4">
@@ -1550,24 +1716,33 @@ export default function Home() {
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
                       <p className="text-xs text-muted-foreground">
                         {supabaseConfig
                           ? `Connected to ${supabaseConfig.url}`
                           : 'Enter your Supabase credentials to connect'}
                       </p>
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 flex-wrap">
                         {supabaseConfig && (
                           <>
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={handleSetupSupabase}
-                              disabled={sbSetup}
+                              onClick={handleCopySetupSql}
                               className="gap-1.5"
                             >
-                              <Database className={`size-3.5 ${sbSetup ? 'animate-pulse' : ''}`} />
-                              Setup Tables
+                              <Copy className="size-3.5" />
+                              Copy Setup SQL
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleVerifySupabaseTables}
+                              disabled={sbVerifying}
+                              className="gap-1.5"
+                            >
+                              <Database className={`size-3.5 ${sbVerifying ? 'animate-pulse' : ''}`} />
+                              Verify
                             </Button>
                             <Button
                               variant="outline"
@@ -1595,35 +1770,70 @@ export default function Home() {
                   </CardContent>
                 </Card>
 
-                {/* Setup SQL Display */}
+                {/* Setup SQL Display - Collapsible */}
                 {sbSetupSql && (
                   <Card className="py-0 gap-0 mb-4 border-amber-200 dark:border-amber-800">
                     <CardContent className="p-4 space-y-3">
                       <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
                         <AlertCircle className="size-4" />
-                        <h3 className="text-sm font-semibold">Setup Required</h3>
+                        <h3 className="text-sm font-semibold">Setup SQL</h3>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Run the SQL below in your Supabase SQL Editor (<a href={`${sbUrl}/sql`} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">{sbUrl}/sql ↗</a>) to create the required tables. After running, click &quot;Setup Tables&quot; again to verify.
+                        Run the SQL below in your Supabase SQL Editor to create the required tables. After running, click &quot;Verify&quot; to confirm.
                       </p>
-                      <div className="relative">
-                        <ScrollArea className="max-h-64">
-                          <pre className="text-xs bg-muted p-3 rounded-md overflow-x-auto whitespace-pre-wrap font-mono">
-                            {sbSetupSql}
-                          </pre>
-                        </ScrollArea>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="mt-2 gap-1.5"
-                          onClick={() => {
-                            navigator.clipboard.writeText(sbSetupSql)
-                            toast.success('SQL copied to clipboard!')
-                          }}
+                      {sbSqlEditorLink && (
+                        <a
+                          href={sbSqlEditorLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300 hover:underline"
                         >
-                          Copy SQL
-                        </Button>
-                      </div>
+                          <ArrowUpRight className="size-3.5" />
+                          Open Supabase SQL Editor
+                        </a>
+                      )}
+                      <Collapsible open={sbSqlExpanded} onOpenChange={setSbSqlExpanded}>
+                        <CollapsibleTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="w-full gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+                          >
+                            {sbSqlExpanded ? (
+                              <>
+                                <ChevronUp className="size-3.5" />
+                                Hide SQL
+                              </>
+                            ) : (
+                              <>
+                                <ChevronDown className="size-3.5" />
+                                Show SQL
+                              </>
+                            )}
+                          </Button>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <div className="relative mt-2">
+                            <ScrollArea className="max-h-64">
+                              <pre className="text-[11px] leading-relaxed bg-muted p-3 rounded-md overflow-x-auto whitespace-pre-wrap font-mono">
+                                {sbSetupSql}
+                              </pre>
+                            </ScrollArea>
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="mt-2 gap-1.5"
+                            onClick={() => {
+                              navigator.clipboard.writeText(sbSetupSql)
+                              toast.success('SQL copied to clipboard!')
+                            }}
+                          >
+                            <Copy className="size-3.5" />
+                            Copy SQL
+                          </Button>
+                        </CollapsibleContent>
+                      </Collapsible>
                     </CardContent>
                   </Card>
                 )}
@@ -1648,11 +1858,31 @@ export default function Home() {
                               <code className="text-sm font-mono bg-muted px-1.5 py-0.5 rounded">
                                 PostgreSQL
                               </code>
+                              {sbTablesExist === true && (
+                                <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-[10px] px-1.5 gap-0.5">
+                                  <Check className="size-2.5" />
+                                  Ready
+                                </Badge>
+                              )}
+                              {sbTablesExist === false && (
+                                <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-0 text-[10px] px-1.5 gap-0.5">
+                                  <AlertCircle className="size-2.5" />
+                                  No Tables
+                                </Badge>
+                              )}
                             </div>
                             <p className="text-xs text-muted-foreground mt-1">
                               <a href={supabaseConfig.url} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">
                                 Open in Supabase ↗
                               </a>
+                              {sbSqlEditorLink && (
+                                <>
+                                  {' · '}
+                                  <a href={sbSqlEditorLink} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">
+                                    SQL Editor ↗
+                                  </a>
+                                </>
+                              )}
                             </p>
                           </div>
                         </div>

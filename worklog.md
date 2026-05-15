@@ -1,35 +1,55 @@
----
-Task ID: 1
-Agent: Main Agent
-Task: Install @supabase/supabase-js and @supabase/ssr packages
+# Task 1: Supabase Database Setup System
 
-Work Log:
-- Installed @supabase/supabase-js and @supabase/ssr via npm
-- Packages added to package.json successfully
+## Summary
+Implemented a comprehensive Supabase database setup system for the kasihtau notification filtering/pushing app, enabling users to create required tables in their Supabase PostgreSQL database via the UI.
 
-Stage Summary:
-- Both Supabase packages installed: @supabase/supabase-js@^2.105.4, @supabase/ssr@^0.10.3
+## Changes Made
 
----
-Task ID: 2
-Agent: Main Agent
-Task: Fix lint errors and configure Supabase database migration
+### 1. New API: `src/app/api/settings/supabase/create-tables/route.ts`
+- **POST endpoint** that accepts an optional `serviceRoleKey` or `dbPassword` in the request body
+- First checks if tables already exist via `testSupabaseDbConnection()`
+- If `serviceRoleKey` is provided, attempts to create tables via Supabase Management API
+- If `dbPassword` is provided, tries direct PostgreSQL connection
+- If automatic methods fail, returns the SQL for manual execution
+- Returns `{ ok, tablesCreated, sql?, sqlEditorLink, message }`
 
-Work Log:
-- Fixed ESLint errors in src/lib/supabase-db.ts: replaced require() imports with ES module imports (path, fs)
-- Updated .env with Supabase configuration placeholders and instructions
-- Updated data/supabase-config.json with pre-filled publishable key
-- Added PostgreSQL migration instructions to prisma/schema.prisma comments
-- Ran lint check - all errors resolved
-- Verified app works with SQLite fallback (notifications API returns data correctly)
-- Built production version successfully
-- Pushed all changes to GitHub (https://github.com/dienk/kasihtau.git)
+### 2. Updated API: `src/app/api/settings/supabase/setup/route.ts`
+- Added `sqlEditorLink` to all responses
+- Added smart error detection for missing tables
+- Now uses `markSupabaseTablesReady()` to track table readiness
 
-Stage Summary:
-- Lint passes clean
-- App works with SQLite fallback database
-- Supabase integration code is already fully built (dual mode: Supabase Client SDK + Prisma/SQLite fallback)
-- Missing: Supabase Project URL (cannot be derived from publishable key alone)
-- The sb_publishable_ key is a newer Supabase format that replaces the anon key, but requires the project URL separately
-- User needs to provide their Supabase Project URL from dashboard (Settings → API) to activate Supabase as primary database
-- Changes pushed to GitHub commit eea9d08
+### 3. Updated API: `src/app/api/settings/supabase/test/route.ts`
+- Now uses `markSupabaseTablesReady()` to track table readiness
+- Updates `tablesReady` flag based on test results
+
+### 4. Updated API: `src/app/api/settings/supabase/route.ts`
+- Now returns `tablesReady` flag in GET response
+- Handles `tablesReady` in POST response
+
+### 5. Updated Core: `src/lib/supabase-db.ts`
+- Added `tablesReady` field to `SupabaseDbConfig` interface
+- `getSupabaseClient()` now requires `tablesReady: true` to use Supabase
+- Added `getSupabaseClientRaw()` for setup/verify operations (bypasses tablesReady check)
+- Added `markSupabaseTablesReady()` function
+- Added `isSupabaseReady()` function
+- `saveSupabaseDbConfig()` now checks table existence and sets `tablesReady`
+- `testSupabaseDbConnection()` now uses `getSupabaseClientRaw()` to bypass tablesReady check
+- Better error detection for missing tables (PGRST205, "schema cache" errors)
+
+### 6. Updated Frontend: `src/app/page.tsx`
+- Updated `fetchSupabaseConfig` to handle `tablesReady` flag
+- Updated `handleSaveSupabase` to check `tablesReady` in response
+- Updated `handleVerifySupabaseTables` to update `dbStatus` and refresh data
+- Default anon key updated to new key
+- Full setup UI with banners, collapsible SQL, verify button, SQL Editor link
+
+### 7. Configuration Updates
+- `.env`: Updated with new Supabase URL and publishable key
+- `data/supabase-config.json`: Updated with new credentials, `tablesReady: false`
+
+## Testing
+- App works correctly with SQLite fallback when Supabase tables don't exist
+- Supabase config API returns `tablesReady: false`
+- Notifications, filter rules, push configs, and push logs all work via Prisma/SQLite
+- Simulate endpoint creates test notifications successfully
+- Lint passes with no errors

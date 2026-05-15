@@ -3,7 +3,6 @@ import {
   getSupabaseDbConfig,
   saveSupabaseDbConfig,
   removeSupabaseDbConfig,
-  testSupabaseDbConnection,
   isSupabaseConfigured,
 } from '@/lib/supabase-db'
 
@@ -25,6 +24,7 @@ export async function GET() {
           ? `${config.anonKey.substring(0, 10)}...${config.anonKey.slice(-4)}`
           : '****',
       isActive: true,
+      tablesReady: config.tablesReady,
     }
 
     return NextResponse.json([masked])
@@ -74,6 +74,7 @@ export async function POST(request: NextRequest) {
           ? `${config.anonKey.substring(0, 10)}...${config.anonKey.slice(-4)}`
           : '****',
       isActive: true,
+      tablesReady: config.tablesReady,
     }
 
     return NextResponse.json(masked)
