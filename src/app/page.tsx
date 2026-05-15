@@ -29,6 +29,7 @@ import {
   WifiOff,
   Radio,
   Database,
+  Server,
 } from 'lucide-react'
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -191,6 +192,19 @@ export default function Home() {
   const [atTesting, setAtTesting] = useState(false)
   const [atSaving, setAtSaving] = useState(false)
 
+  // Supabase integration state
+  const [supabaseConfig, setSupabaseConfig] = useState<{
+    id: string
+    url: string
+    anonKey: string
+    isActive: boolean
+  } | null>(null)
+  const [sbUrl, setSbUrl] = useState('')
+  const [sbAnonKey, setSbAnonKey] = useState('')
+  const [sbTesting, setSbTesting] = useState(false)
+  const [sbSaving, setSbSaving] = useState(false)
+  const [sbSetup, setSbSetup] = useState(false)
+
   // ── Data Fetching ──────────────────────────────────────────────────────
 
   const fetchNotifications = useCallback(async () => {
@@ -258,6 +272,21 @@ export default function Home() {
     }
   }, [])
 
+  const fetchSupabaseConfig = useCallback(async () => {
+    try {
+      const res = await fetch('/api/settings/supabase')
+      if (res.ok) {
+        const data = await res.json()
+        if (data.length > 0) {
+          setSupabaseConfig(data[0])
+          setSbUrl(data[0].url)
+        }
+      }
+    } catch {
+      // API not yet available
+    }
+  }, [])
+
   const fetchAll = useCallback(async () => {
     setLoading(true)
     await Promise.all([
@@ -266,9 +295,10 @@ export default function Home() {
       fetchPushConfigs(),
       fetchPushLogs(),
       fetchAirtableConfig(),
+      fetchSupabaseConfig(),
     ])
     setLoading(false)
-  }, [fetchNotifications, fetchFilterRules, fetchPushConfigs, fetchPushLogs, fetchAirtableConfig])
+  }, [fetchNotifications, fetchFilterRules, fetchPushConfigs, fetchPushLogs, fetchAirtableConfig, fetchSupabaseConfig])
 
   useEffect(() => {
     fetchAll()
@@ -662,6 +692,122 @@ export default function Home() {
         setAtTableName('Notifications')
       } else {
         toast.error('Failed to delete Airtable config')
+      }
+    } catch {
+      toast.error('Failed to connect to server')
+    }
+  }
+
+  // ── Supabase Actions ────────────────────────────────────────────────────
+
+  const handleSaveSupabase = async () => {
+    if (!sbUrl.trim() || !sbAnonKey.trim()) {
+      toast.error('Please fill in Supabase URL and Anon Key')
+      return
+    }
+    setSbSaving(true)
+    try {
+      const res = await fetch('/api/settings/supabase', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: sbUrl.trim(),
+          anonKey: sbAnonKey.trim(),
+        }),
+      })
+      if (res.ok) {
+        toast.success(supabaseConfig ? 'Supabase config updated!' : 'Supabase connected!')
+        setSbAnonKey('')
+        await fetchSupabaseConfig()
+      } else {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data.error || 'Failed to save Supabase config')
+      }
+    } catch {
+      toast.error('Failed to connect to server')
+    } finally {
+      setSbSaving(false)
+    }
+  }
+
+  const handleTestSupabase = async () => {
+    setSbTesting(true)
+    try {
+      const res = await fetch('/api/settings/supabase/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        toast.success(data.ok ? 'Supabase connection successful!' : `Connection issue: ${data.error || 'Unknown'}`)
+      } else {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data.error || 'Supabase connection failed')
+      }
+    } catch {
+      toast.error('Failed to test Supabase connection')
+    } finally {
+      setSbTesting(false)
+    }
+  }
+
+  const handleSetupSupabase = async () => {
+    setSbSetup(true)
+    try {
+      const res = await fetch('/api/settings/supabase/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        toast.success(data.ok ? 'Supabase tables verified!' : `Setup issue: ${data.error || 'Unknown'}`)
+      } else {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data.error || 'Failed to setup Supabase tables')
+      }
+    } catch {
+      toast.error('Failed to setup Supabase tables')
+    } finally {
+      setSbSetup(false)
+    }
+  }
+
+  const handleToggleSupabase = async (checked: boolean) => {
+    if (!supabaseConfig) return
+    try {
+      const res = await fetch('/api/settings/supabase', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: supabaseConfig.url,
+          anonKey: supabaseConfig.anonKey,
+          isActive: checked,
+        }),
+      })
+      if (res.ok) {
+        setSupabaseConfig((prev) => prev ? { ...prev, isActive: checked } : null)
+        toast.success(checked ? 'Supabase integration enabled' : 'Supabase integration disabled')
+      } else {
+        toast.error('Failed to update Supabase config')
+      }
+    } catch {
+      toast.error('Failed to connect to server')
+    }
+  }
+
+  const handleDeleteSupabase = async () => {
+    if (!supabaseConfig) return
+    try {
+      const res = await fetch('/api/settings/supabase', {
+        method: 'DELETE',
+      })
+      if (res.ok) {
+        toast.success('Supabase config deleted')
+        setSupabaseConfig(null)
+        setSbUrl('')
+        setSbAnonKey('')
+      } else {
+        toast.error('Failed to delete Supabase config')
       }
     } catch {
       toast.error('Failed to connect to server')
@@ -1313,6 +1459,136 @@ export default function Home() {
                           size="icon"
                           className="size-8 text-muted-foreground hover:text-destructive shrink-0"
                           onClick={handleDeleteAirtable}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </section>
+
+              <Separator />
+
+              {/* Supabase Integration Section */}
+              <section>
+                <div className="flex items-center gap-2 mb-4">
+                  <Server className="size-5 text-emerald-600" />
+                  <h2 className="text-lg font-semibold">Supabase Integration</h2>
+                  {supabaseConfig?.isActive && (
+                    <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-xs gap-1">
+                      <Zap className="size-3" />
+                      Connected
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Sync filtered notifications to your Supabase PostgreSQL database automatically. Each filtered notification is stored as a record in the Notifications table.
+                </p>
+
+                {/* Supabase Config Form */}
+                <Card className="py-0 gap-0 mb-4">
+                  <CardContent className="p-4 space-y-3">
+                    <div className="grid gap-3">
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground mb-1 block">Project URL</label>
+                        <Input
+                          placeholder="https://your-project.supabase.co"
+                          value={sbUrl}
+                          onChange={(e) => setSbUrl(e.target.value)}
+                          className="h-9 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground mb-1 block">Anon / Publishable Key</label>
+                        <Input
+                          type="password"
+                          placeholder="sb_publishable_... or eyJ..."
+                          value={sbAnonKey}
+                          onChange={(e) => setSbAnonKey(e.target.value)}
+                          className="h-9 text-sm"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-muted-foreground">
+                        {supabaseConfig
+                          ? `Connected to ${supabaseConfig.url}`
+                          : 'Enter your Supabase credentials to connect'}
+                      </p>
+                      <div className="flex gap-2">
+                        {supabaseConfig && (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleSetupSupabase}
+                              disabled={sbSetup}
+                              className="gap-1.5"
+                            >
+                              <Database className={`size-3.5 ${sbSetup ? 'animate-pulse' : ''}`} />
+                              Setup
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleTestSupabase}
+                              disabled={sbTesting}
+                              className="gap-1.5"
+                            >
+                              <RefreshCw className={`size-3.5 ${sbTesting ? 'animate-spin' : ''}`} />
+                              Test
+                            </Button>
+                          </>
+                        )}
+                        <Button
+                          onClick={handleSaveSupabase}
+                          disabled={sbSaving}
+                          className="bg-emerald-600 hover:bg-emerald-700 gap-1.5"
+                          size="sm"
+                        >
+                          <Plus className="size-4" />
+                          {supabaseConfig ? 'Update' : 'Connect'}
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Connection Status Card */}
+                {supabaseConfig && (
+                  <Card className="py-0 gap-0">
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Switch
+                            checked={supabaseConfig.isActive}
+                            onCheckedChange={(checked) => handleToggleSupabase(checked)}
+                            className="data-[state=checked]:bg-emerald-600"
+                          />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <code className="text-sm font-mono font-medium bg-muted px-1.5 py-0.5 rounded">
+                                {supabaseConfig.url.replace('https://', '').replace('.supabase.co', '')}
+                              </code>
+                              <span className="text-muted-foreground text-sm">→</span>
+                              <code className="text-sm font-mono bg-muted px-1.5 py-0.5 rounded">
+                                Notifications
+                              </code>
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              <a href={supabaseConfig.url} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">
+                                Open in Supabase ↗
+                              </a>
+                            </p>
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:text-destructive shrink-0"
+                          onClick={handleDeleteSupabase}
                         >
                           <Trash2 className="size-4" />
                         </Button>
