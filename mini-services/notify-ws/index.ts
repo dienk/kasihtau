@@ -1,4 +1,4 @@
-import { createServer } from 'http'
+import { createServer, IncomingMessage, ServerResponse } from 'http'
 import { Server } from 'socket.io'
 
 const httpServer = createServer()
@@ -30,6 +30,33 @@ function addRecentEvent(type: string, data: unknown) {
   }
 }
 
+// HTTP endpoint for emitting events from API routes
+httpServer.on('request', (req: IncomingMessage, res: ServerResponse) => {
+  if (req.method === 'POST' && req.url === '/emit') {
+    let body = ''
+    req.on('data', (chunk) => {
+      body += chunk
+    })
+    req.on('end', () => {
+      try {
+        const { event, data } = JSON.parse(body)
+        if (event && typeof event === 'string') {
+          addRecentEvent(event, data)
+          io.emit(event, data)
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true }))
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: false, error: 'Invalid JSON' }))
+      }
+    })
+  } else {
+    res.writeHead(404)
+    res.end('Not found')
+  }
+})
+
 io.on('connection', (socket) => {
   console.log(`Client connected: ${socket.id}`)
 
@@ -46,32 +73,6 @@ io.on('connection', (socket) => {
     })
   })
 
-  // Handle manual push trigger (from API routes)
-  socket.on('notification:created', (data) => {
-    addRecentEvent('notification:created', data)
-    io.emit('notification:created', data)
-  })
-
-  socket.on('notification:filtered', (data) => {
-    addRecentEvent('notification:filtered', data)
-    io.emit('notification:filtered', data)
-  })
-
-  socket.on('notification:pushed', (data) => {
-    addRecentEvent('notification:pushed', data)
-    io.emit('notification:pushed', data)
-  })
-
-  socket.on('notification:push-failed', (data) => {
-    addRecentEvent('notification:push-failed', data)
-    io.emit('notification:push-failed', data)
-  })
-
-  socket.on('notifications:bulk-created', (data) => {
-    addRecentEvent('notifications:bulk-created', data)
-    io.emit('notifications:bulk-created', data)
-  })
-
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`)
   })
@@ -85,9 +86,6 @@ const PORT = 3003
 httpServer.listen(PORT, () => {
   console.log(`NotifyPush WebSocket server running on port ${PORT}`)
 })
-
-// Export io for use in API routes (via emit helper)
-export { io }
 
 // Graceful shutdown
 process.on('SIGTERM', () => {

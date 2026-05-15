@@ -1,13 +1,11 @@
 /**
  * Supabase Database Service
  * Uses Supabase PostgreSQL as the ONLY database via the client SDK.
- * Configuration is stored in a local JSON file and/or environment variables.
+ * Configuration is loaded from environment variables.
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { randomUUID } from 'crypto'
-import { join } from 'path'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 
 // ─── Config Management ─────────────────────────────────────────────────────
 
@@ -18,33 +16,13 @@ interface SupabaseDbConfig {
   tablesReady: boolean
 }
 
-// In-memory config cache
+// In-memory config cache (no file system dependency)
 let cachedConfig: SupabaseDbConfig | null = null
-
-function getConfigPath(): string {
-  try {
-    return join(process.cwd(), 'data', 'supabase-config.json')
-  } catch {
-    return ''
-  }
-}
 
 function readConfig(): SupabaseDbConfig {
   if (cachedConfig) return cachedConfig
 
-  // First try the JSON config file
-  try {
-    const configPath = getConfigPath()
-    if (configPath && existsSync(configPath)) {
-      const raw = readFileSync(configPath, 'utf-8')
-      cachedConfig = JSON.parse(raw)
-      return cachedConfig!
-    }
-  } catch {
-    // ignore
-  }
-
-  // Fallback to environment variables
+  // Read from environment variables
   const envUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const envKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   if (envUrl && envKey) {
@@ -52,7 +30,7 @@ function readConfig(): SupabaseDbConfig {
       url: envUrl,
       anonKey: envKey,
       isConfigured: true,
-      tablesReady: true, // Assume tables are ready if env vars are set
+      tablesReady: true,
     }
     cachedConfig = config
     return config
@@ -63,19 +41,6 @@ function readConfig(): SupabaseDbConfig {
 
 function writeConfig(config: SupabaseDbConfig): void {
   cachedConfig = config
-  try {
-    const configPath = getConfigPath()
-    if (configPath) {
-      // Ensure data directory exists
-      const dataDir = join(process.cwd(), 'data')
-      if (!existsSync(dataDir)) {
-        mkdirSync(dataDir, { recursive: true })
-      }
-      writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
-    }
-  } catch (err) {
-    console.error('[SupabaseDB] Failed to write config:', err)
-  }
 }
 
 // ─── Singleton Client ──────────────────────────────────────────────────────
@@ -815,7 +780,6 @@ export async function deletePushConfig(id: string): Promise<void> {
 export async function getPushLogs(limit: number = 50): Promise<any[]> {
   const client = getSupabaseClient()
 
-  // Try with join first, fall back to simple query
   try {
     const { data, error } = await client
       .from('push_logs')
@@ -824,7 +788,6 @@ export async function getPushLogs(limit: number = 50): Promise<any[]> {
       .limit(limit)
 
     if (error) {
-      // If join fails, try without join
       console.warn('[SupabaseDB] Push logs join failed, trying simple query:', error.message)
       const { data: simpleData, error: simpleError } = await client
         .from('push_logs')

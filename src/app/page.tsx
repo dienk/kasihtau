@@ -28,9 +28,6 @@ import {
   WifiOff,
   Radio,
   Database,
-  Server,
-  Copy,
-  ExternalLink,
 } from 'lucide-react'
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -144,10 +141,6 @@ function tryParseJson(str: string): string {
   }
 }
 
-function maskKey(key: string): string {
-  if (!key || key.length < 12) return key
-  return key.slice(0, 8) + '...' + key.slice(-4)
-}
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
@@ -185,24 +178,8 @@ export default function Home() {
   const [newConfigMethod, setNewConfigMethod] = useState<'POST' | 'GET'>('POST')
   const [newConfigHeaders, setNewConfigHeaders] = useState('')
 
-  // Supabase integration state
-  const [supabaseConfig, setSupabaseConfig] = useState<{
-    id: string
-    url: string
-    anonKey: string
-    isActive: boolean
-  } | null>(null)
-  const [sbUrl, setSbUrl] = useState('')
-  const [sbAnonKey, setSbAnonKey] = useState('')
-  const [sbTesting, setSbTesting] = useState(false)
-  const [sbSaving, setSbSaving] = useState(false)
-  const [sbSetup, setSbSetup] = useState(false)
+  // Database status
   const [dbStatus, setDbStatus] = useState<'supabase' | 'unknown'>('unknown')
-  const [sbSetupSql, setSbSetupSql] = useState<string | null>(null)
-  const [sbTablesExist, setSbTablesExist] = useState<boolean | null>(null)
-  const [sbSqlEditorLink, setSbSqlEditorLink] = useState<string | null>(null)
-  const [sbVerifying, setSbVerifying] = useState(false)
-  const [sbSqlExpanded, setSbSqlExpanded] = useState(false)
 
   // ── Data Fetching ──────────────────────────────────────────────────────
 
@@ -254,41 +231,20 @@ export default function Home() {
     }
   }, [])
 
-  const fetchSupabaseConfig = useCallback(async () => {
+  const fetchDbStatus = useCallback(async () => {
     try {
       const res = await fetch('/api/settings/supabase')
       if (res.ok) {
         const data = await res.json()
-        if (Array.isArray(data) && data.length > 0) {
-          const config = data[0]
-          setSupabaseConfig(config)
-          setSbUrl(config.url || '')
-          if (config.tablesReady) {
-            setDbStatus('supabase')
-            setSbTablesExist(true)
-          } else {
-            setSbTablesExist(false)
-          }
-        } else if (data && !Array.isArray(data) && data.url) {
-          setSupabaseConfig(data)
-          setSbUrl(data.url || '')
-          if (data.tablesReady) {
-            setDbStatus('supabase')
-            setSbTablesExist(true)
-          } else {
-            setSbTablesExist(false)
-          }
+        const config = Array.isArray(data) ? data[0] : data
+        if (config?.isConfigured || config?.tablesReady) {
+          setDbStatus('supabase')
         } else {
           setDbStatus('unknown')
-          setSbTablesExist(null)
         }
-      } else {
-        setDbStatus('unknown')
-        setSbTablesExist(null)
       }
     } catch {
       setDbStatus('unknown')
-      setSbTablesExist(null)
     }
   }, [])
 
@@ -299,10 +255,10 @@ export default function Home() {
       fetchFilterRules(),
       fetchPushConfigs(),
       fetchPushLogs(),
-      fetchSupabaseConfig(),
+      fetchDbStatus(),
     ])
     setLoading(false)
-  }, [fetchNotifications, fetchFilterRules, fetchPushConfigs, fetchPushLogs, fetchSupabaseConfig])
+  }, [fetchNotifications, fetchFilterRules, fetchPushConfigs, fetchPushLogs, fetchDbStatus])
 
   useEffect(() => {
     fetchAll()
@@ -599,207 +555,6 @@ export default function Home() {
         setPushConfigs((prev) => prev.filter((c) => c.id !== id))
       } else {
         toast.error('Failed to delete push config')
-      }
-    } catch {
-      toast.error('Failed to connect to server')
-    }
-  }
-
-  // ── Supabase Actions ────────────────────────────────────────────────────
-
-  const handleSaveSupabase = async () => {
-    if (!sbUrl.trim() || !sbAnonKey.trim()) {
-      toast.error('Please fill in Supabase URL and Anon Key')
-      return
-    }
-    setSbSaving(true)
-    try {
-      const res = await fetch('/api/settings/supabase', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: sbUrl.trim(),
-          anonKey: sbAnonKey.trim(),
-        }),
-      })
-      if (res.ok) {
-        const data = await res.json().catch(() => ({}))
-        const isReady = data.tablesReady === true
-        toast.success(
-          isReady
-            ? (supabaseConfig ? 'Supabase config updated!' : 'Supabase connected and ready!')
-            : (supabaseConfig ? 'Supabase config updated! Tables still need setup.' : 'Supabase connected! Tables need to be created.')
-        )
-        setSbAnonKey('')
-        setDbStatus(isReady ? 'supabase' : 'unknown')
-        await fetchSupabaseConfig()
-        await fetchNotifications()
-        await fetchFilterRules()
-        await fetchPushConfigs()
-        await fetchPushLogs()
-        await handleVerifySupabaseTables()
-      } else {
-        const data = await res.json().catch(() => ({}))
-        toast.error(data.error || 'Failed to save Supabase config')
-      }
-    } catch {
-      toast.error('Failed to connect to server')
-    } finally {
-      setSbSaving(false)
-    }
-  }
-
-  const handleTestSupabase = async () => {
-    setSbTesting(true)
-    try {
-      const res = await fetch('/api/settings/supabase', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'test' }),
-      })
-      if (res.ok) {
-        const data = await res.json()
-        toast.success(data.ok ? 'Supabase connection successful!' : `Connection issue: ${data.error || 'Unknown'}`)
-      } else {
-        const data = await res.json().catch(() => ({}))
-        toast.error(data.error || 'Supabase connection failed')
-      }
-    } catch {
-      toast.error('Failed to test Supabase connection')
-    } finally {
-      setSbTesting(false)
-    }
-  }
-
-  const handleSetupSupabase = async () => {
-    setSbSetup(true)
-    try {
-      const res = await fetch('/api/settings/supabase/setup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      })
-      if (res.ok) {
-        const data = await res.json()
-        if (data.ok && data.tablesExist) {
-          toast.success('Supabase tables verified!')
-          setSbSetupSql(null)
-          setSbTablesExist(true)
-          setDbStatus('supabase')
-          setSbSqlEditorLink(data.sqlEditorLink || null)
-        } else if (data.ok && data.sql) {
-          setSbSetupSql(data.sql)
-          setSbTablesExist(false)
-          setSbSqlEditorLink(data.sqlEditorLink || null)
-          toast.info('Tables need to be created. Copy the SQL and run it in Supabase SQL Editor.')
-        } else {
-          toast.error(`Setup issue: ${data.error || 'Unknown'}`)
-        }
-      } else {
-        const data = await res.json().catch(() => ({}))
-        toast.error(data.error || 'Failed to setup Supabase tables')
-      }
-    } catch {
-      toast.error('Failed to setup Supabase tables')
-    } finally {
-      setSbSetup(false)
-    }
-  }
-
-  const handleVerifySupabaseTables = async () => {
-    setSbVerifying(true)
-    try {
-      const res = await fetch('/api/settings/supabase', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'test' }),
-      })
-      if (res.ok) {
-        const data = await res.json()
-        if (data.ok && data.tablesExist) {
-          setSbTablesExist(true)
-          setDbStatus('supabase')
-          setSbSetupSql(null)
-          toast.success('Database tables verified! Supabase is ready.')
-          await fetchNotifications()
-          await fetchFilterRules()
-          await fetchPushConfigs()
-          await fetchPushLogs()
-        } else if (data.ok && !data.tablesExist) {
-          setSbTablesExist(false)
-          setDbStatus('unknown')
-          toast.info('Tables not found yet. Run the setup SQL first.')
-        } else {
-          setSbTablesExist(null)
-          toast.error(`Connection issue: ${data.error || 'Unknown'}`)
-        }
-      } else {
-        const data = await res.json().catch(() => ({}))
-        toast.error(data.error || 'Failed to verify tables')
-      }
-    } catch {
-      toast.error('Failed to verify Supabase tables')
-    } finally {
-      setSbVerifying(false)
-    }
-  }
-
-  const handleCopySetupSql = async () => {
-    if (!sbSetupSql) {
-      try {
-        const res = await fetch('/api/settings/supabase/setup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        })
-        if (res.ok) {
-          const data = await res.json()
-          if (data.sql) {
-            setSbSetupSql(data.sql)
-            if (data.sqlEditorLink) setSbSqlEditorLink(data.sqlEditorLink)
-            if (data.tablesExist) {
-              setSbTablesExist(true)
-              setDbStatus('supabase')
-              toast.info('Tables already exist!')
-              return
-            }
-          }
-        }
-      } catch {
-        toast.error('Failed to fetch setup SQL')
-        return
-      }
-    }
-
-    if (sbSetupSql) {
-      try {
-        await navigator.clipboard.writeText(sbSetupSql)
-        toast.success('Setup SQL copied to clipboard!')
-      } catch {
-        toast.error('Failed to copy SQL')
-      }
-    }
-  }
-
-  const handleDeleteSupabase = async () => {
-    if (!supabaseConfig) return
-    try {
-      const res = await fetch('/api/settings/supabase', {
-        method: 'DELETE',
-      })
-      if (res.ok) {
-        toast.success('Supabase disconnected')
-        setSupabaseConfig(null)
-        setSbUrl('')
-        setSbAnonKey('')
-        setDbStatus('unknown')
-        setSbSetupSql(null)
-        setSbTablesExist(null)
-        setSbSqlEditorLink(null)
-        await fetchNotifications()
-        await fetchFilterRules()
-        await fetchPushConfigs()
-        await fetchPushLogs()
-      } else {
-        toast.error('Failed to disconnect Supabase')
       }
     } catch {
       toast.error('Failed to connect to server')
@@ -1469,233 +1224,7 @@ export default function Home() {
                 )}
               </section>
 
-              <Separator />
 
-              {/* ── Supabase Database Section ─────────────────────────────── */}
-              <section>
-                <div className="flex items-center gap-2 mb-4">
-                  <Server className="size-5 text-emerald-600" />
-                  <h2 className="text-lg font-semibold">Database (Supabase)</h2>
-                  {dbStatus === 'supabase' && sbTablesExist === true && (
-                    <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-xs gap-1">
-                      <Zap className="size-3" />
-                      Connected
-                    </Badge>
-                  )}
-                  {supabaseConfig && sbTablesExist === false && (
-                    <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-0 text-xs gap-1">
-                      <AlertCircle className="size-3" />
-                      Setup Required
-                    </Badge>
-                  )}
-                  {dbStatus === 'unknown' && !supabaseConfig && (
-                    <Badge variant="outline" className="text-xs gap-1">
-                      <Database className="size-3" />
-                      Not Configured
-                    </Badge>
-                  )}
-                </div>
-                <p className="text-sm text-muted-foreground mb-4">
-                  Connect to Supabase PostgreSQL as your primary database. All notifications,
-                  filter rules, push configs, and logs are stored in Supabase.
-                </p>
-
-                {/* Supabase Config Form */}
-                <Card className="py-0 gap-0 mb-4">
-                  <CardContent className="p-4 space-y-3">
-                    <div className="grid gap-3">
-                      <div>
-                        <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                          Supabase URL
-                        </label>
-                        <Input
-                          placeholder="https://your-project.supabase.co"
-                          value={sbUrl}
-                          onChange={(e) => setSbUrl(e.target.value)}
-                          className="h-9 text-sm"
-                        />
-                        {supabaseConfig && (
-                          <p className="text-[11px] text-muted-foreground mt-1">
-                            Current: {supabaseConfig.url}
-                          </p>
-                        )}
-                      </div>
-                      <div>
-                        <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                          Anon Key
-                        </label>
-                        <Input
-                          type="password"
-                          placeholder="eyJhbGciOiJIUzI1NiIs..."
-                          value={sbAnonKey}
-                          onChange={(e) => setSbAnonKey(e.target.value)}
-                          className="h-9 text-sm"
-                        />
-                        {supabaseConfig && !sbAnonKey && (
-                          <p className="text-[11px] text-muted-foreground mt-1">
-                            Current key: {maskKey(supabaseConfig.anonKey)}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2 justify-end">
-                      {supabaseConfig && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleTestSupabase}
-                          disabled={sbTesting}
-                          className="gap-1.5"
-                        >
-                          <RefreshCw className={`size-3.5 ${sbTesting ? 'animate-spin' : ''}`} />
-                          Test
-                        </Button>
-                      )}
-                      {supabaseConfig && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleSetupSupabase}
-                          disabled={sbSetup}
-                          className="gap-1.5"
-                        >
-                          <Database className={`size-3.5 ${sbSetup ? 'animate-pulse' : ''}`} />
-                          Setup
-                        </Button>
-                      )}
-                      {supabaseConfig && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleVerifySupabaseTables}
-                          disabled={sbVerifying}
-                          className="gap-1.5"
-                        >
-                          <Check className={`size-3.5 ${sbVerifying ? 'animate-pulse' : ''}`} />
-                          Verify
-                        </Button>
-                      )}
-                      <Button
-                        onClick={handleSaveSupabase}
-                        disabled={sbSaving}
-                        className="bg-emerald-600 hover:bg-emerald-700 gap-1.5"
-                        size="sm"
-                      >
-                        <Plus className="size-4" />
-                        {supabaseConfig ? 'Update' : 'Connect'}
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Connected Status Card */}
-                {supabaseConfig && (
-                  <Card className="py-0 gap-0 mb-4">
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className={`size-3 rounded-full shrink-0 ${dbStatus === 'supabase' && sbTablesExist === true ? 'bg-emerald-500' : sbTablesExist === false ? 'bg-amber-500' : 'bg-muted-foreground'}`} />
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium">
-                              Supabase {dbStatus === 'supabase' && sbTablesExist === true ? '(Connected)' : sbTablesExist === false ? '(Setup Required)' : '(Checking...)'}
-                            </p>
-                            <p className="text-xs text-muted-foreground truncate max-w-[250px] sm:max-w-[350px]">
-                              {supabaseConfig.url}
-                            </p>
-                          </div>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-muted-foreground hover:text-destructive shrink-0"
-                          onClick={handleDeleteSupabase}
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                )}
-
-                {/* Database Setup Required Banner */}
-                {supabaseConfig && sbTablesExist === false && (
-                  <Alert className="mb-4 border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30">
-                    <AlertCircle className="size-4 text-amber-600" />
-                    <AlertTitle className="text-amber-800 dark:text-amber-300 text-sm font-semibold">
-                      Database Setup Required
-                    </AlertTitle>
-                    <AlertDescription className="text-amber-700 dark:text-amber-400 text-xs space-y-3">
-                      <p>
-                        Your Supabase project is connected but the required tables don&apos;t exist yet.
-                        You need to run the setup SQL in the Supabase SQL Editor to create them.
-                      </p>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleCopySetupSql}
-                          className="gap-1.5 border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 h-8"
-                        >
-                          <Copy className="size-3.5" />
-                          Copy Setup SQL
-                        </Button>
-                        {sbSqlEditorLink && (
-                          <a
-                            href={sbSqlEditorLink}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="gap-1.5 border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 h-8"
-                            >
-                              <ExternalLink className="size-3.5" />
-                              Open SQL Editor
-                            </Button>
-                          </a>
-                        )}
-                      </div>
-
-                      {/* Expandable SQL Display */}
-                      {sbSetupSql && (
-                        <Collapsible open={sbSqlExpanded} onOpenChange={setSbSqlExpanded}>
-                          <CollapsibleTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="gap-1 text-amber-700 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/50 h-7 px-2 text-xs"
-                            >
-                              {sbSqlExpanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
-                              {sbSqlExpanded ? 'Hide SQL' : 'Show SQL'}
-                            </Button>
-                          </CollapsibleTrigger>
-                          <CollapsibleContent>
-                            <pre className="bg-amber-100 dark:bg-amber-950/50 rounded-lg p-3 text-xs font-mono overflow-x-auto max-h-64 overflow-y-auto mt-2 border border-amber-200 dark:border-amber-800">
-                              {sbSetupSql}
-                            </pre>
-                          </CollapsibleContent>
-                        </Collapsible>
-                      )}
-                    </AlertDescription>
-                  </Alert>
-                )}
-
-                {/* Not Connected Help */}
-                {!supabaseConfig && (
-                  <Alert>
-                    <Database className="size-4" />
-                    <AlertTitle>No database configured</AlertTitle>
-                    <AlertDescription className="text-xs space-y-2">
-                      <p>
-                        Enter your Supabase URL and Anon Key above to connect. You can find these in
-                        your Supabase project dashboard under Settings → API.
-                      </p>
-                    </AlertDescription>
-                  </Alert>
-                )}
-              </section>
             </div>
           </TabsContent>
 
