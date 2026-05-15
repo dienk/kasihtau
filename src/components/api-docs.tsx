@@ -559,8 +559,8 @@ export function ApiDocs() {
         {/* ── Header ──────────────────────────────────────────────────────── */}
         <div>
           <div className="flex items-center gap-2 mb-2">
-            <div className="flex items-center justify-center size-8 rounded-2xl bg-gradient-to-br from-emerald-400 to-emerald-600 text-white shadow-md shadow-emerald-200 dark:shadow-emerald-900/30">
-              <CatLogo className="size-5" />
+            <div className="flex items-center justify-center h-8 w-9 rounded-2xl bg-gradient-to-br from-emerald-400 to-emerald-600 text-white shadow-md shadow-emerald-200 dark:shadow-emerald-900/30">
+              <CatLogo className="size-6" />
             </div>
             <h2 className="text-xl font-bold tracking-tight">API Documentation</h2>
           </div>
