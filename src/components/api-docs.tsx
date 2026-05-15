@@ -558,13 +558,13 @@ export function ApiDocs() {
         {/* ── Header ──────────────────────────────────────────────────────── */}
         <div>
           <div className="flex items-center gap-2 mb-2">
-            <div className="flex items-center justify-center size-8 rounded-lg bg-emerald-600 text-white">
+            <div className="flex items-center justify-center size-8 rounded-2xl bg-gradient-to-br from-emerald-400 to-emerald-600 text-white shadow-md shadow-emerald-200 dark:shadow-emerald-900/30">
               <Globe className="size-4" />
             </div>
             <h2 className="text-xl font-bold tracking-tight">API Documentation</h2>
           </div>
           <p className="text-sm text-muted-foreground">
-            Complete reference for the NotifyPush REST API. All endpoints are
+            Complete reference for the NPush REST API. All endpoints are
             relative to <code className="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">http://localhost:3000</code>
           </p>
           <div className="flex items-center gap-3 mt-3 flex-wrap">
@@ -789,7 +789,7 @@ export function ApiDocs() {
         {/* ── Footer ──────────────────────────────────────────────────────── */}
         <div className="text-center py-4">
           <p className="text-xs text-muted-foreground">
-            NotifyPush API v1.0 -- All endpoints accept and return JSON.
+            NPush API v1.0 -- All endpoints accept and return JSON.
           </p>
         </div>
       </div>

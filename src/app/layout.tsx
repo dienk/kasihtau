@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "NotifyPush - Notification Manager",
-  description: "Mobile-first notification manager with filter rules and push notifications",
+  title: "NPush - Notification Manager",
+  description: "Filter notifications by keywords and push them to your webhook URLs",
 };
 
 export default function RootLayout({
