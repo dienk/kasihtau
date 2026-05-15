@@ -56,6 +56,7 @@ import {
 } from '@/components/ui/dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { ApiDocs } from '@/components/api-docs'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -801,6 +802,13 @@ export default function Home() {
                   <History className="size-4" />
                   <span>Logs</span>
                 </TabsTrigger>
+                <TabsTrigger
+                  value="api-docs"
+                  className="flex-1 h-12 rounded-none data-[state=active]:shadow-none data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-emerald-600 data-[state=active]:text-emerald-700 dark:data-[state=active]:text-emerald-400 gap-2 text-sm"
+                >
+                  <Globe className="size-4" />
+                  <span>API Docs</span>
+                </TabsTrigger>
               </TabsList>
             </div>
           </div>
@@ -1469,6 +1477,11 @@ export default function Home() {
                 </div>
               )}
             </div>
+          </TabsContent>
+
+          {/* ── Tab 4: API Docs ───────────────────────────────────────────── */}
+          <TabsContent value="api-docs" className="flex-1 mt-0">
+            <ApiDocs />
           </TabsContent>
         </Tabs>
       </main>
