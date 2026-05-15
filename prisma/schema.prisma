@@ -1,87 +1,73 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 //
-// To switch to Supabase PostgreSQL:
-// 1. Change provider from "sqlite" to "postgresql"
-// 2. Set DATABASE_URL in .env to your Supabase connection string
-//    (find it at: https://supabase.com/dashboard → Project → Settings → Database)
-// 3. Run: bun run db:push
+// Note: The app uses Supabase PostgreSQL via the client SDK (@supabase/supabase-js)
+// directly (see src/lib/supabase-db.ts). This Prisma schema is kept for reference
+// and is not actively used for database operations.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
 model Notification {
   id         String   @id @default(cuid())
-  appName    String   @default("Unknown")
+  appName    String   @default("Unknown")  @map("app_name")
   title      String
   message    String
   prefix     String?
-  isRead     Boolean  @default(false)
-  isFiltered Boolean  @default(false)
-  isPushed   Boolean  @default(false)
-  pushStatus String   @default("pending") // pending, success, failed
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  isRead     Boolean  @default(false) @map("is_read")
+  isFiltered Boolean  @default(false) @map("is_filtered")
+  isPushed   Boolean  @default(false) @map("is_pushed")
+  pushStatus String   @default("pending") @map("push_status")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
   pushLogs   PushLog[]
+
+  @@map("notifications")
 }
 
 model FilterRule {
   id        String   @id @default(cuid())
   prefix    String   @unique
-  matchMode String   @default("contains") // "startsWith" or "contains"
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  matchMode String   @default("contains") @map("match_mode")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("filter_rules")
 }
 
 model PushConfig {
   id        String   @id @default(cuid())
   url       String
   method    String   @default("POST")
-  headers   String   @default("{}") // JSON string for custom headers
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  headers   String   @default("{}")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
   pushLogs  PushLog[]
+
+  @@map("push_configs")
 }
 
 model PushLog {
   id             String   @id @default(cuid())
-  notificationId String
-  pushConfigId   String?
-  status         String   @default("pending") // pending, success, failed
-  requestBody    String   @default("{}") // JSON of what was sent
-  responseStatus Int?
-  responseBody   String?
-  errorMessage   String?
-  pushedAt       DateTime @default(now())
+  notificationId String   @map("notification_id")
+  pushConfigId   String?  @map("push_config_id")
+  status         String   @default("pending")
+  requestBody    String   @default("{}") @map("request_body")
+  responseStatus Int?     @map("response_status")
+  responseBody   String?  @map("response_body")
+  errorMessage   String?  @map("error_message")
+  pushedAt       DateTime @default(now()) @map("pushed_at")
 
   notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
   pushConfig   PushConfig?  @relation(fields: [pushConfigId], references: [id], onDelete: SetNull)
-}
 
-model AirtableConfig {
-  id        String   @id @default(cuid())
-  baseUrl   String   // e.g. https://airtable.com/appS02vV9NX6QERC7
-  baseId    String   // e.g. appS02vV9NX6QERC7
-  token     String   // Personal Access Token
-  tableName String   @default("Notifications") // Table name in Airtable
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model SupabaseConfig {
-  id        String   @id @default(cuid())
-  url       String   // e.g. https://xyzproject.supabase.co
-  anonKey   String   // The publishable/anon key (sb_publishable_...)
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  @@map("push_logs")
 }

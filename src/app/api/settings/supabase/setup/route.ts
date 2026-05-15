@@ -28,7 +28,6 @@ export async function POST() {
         errMsg.includes('schema cache')
 
       if (isMissingTableError) {
-        // Mark tables as not ready
         markSupabaseTablesReady(false)
 
         return NextResponse.json({
@@ -48,7 +47,6 @@ export async function POST() {
     }
 
     if (result.tablesExist) {
-      // Mark tables as ready
       markSupabaseTablesReady(true)
 
       return NextResponse.json({
@@ -59,7 +57,6 @@ export async function POST() {
       })
     }
 
-    // Mark tables as not ready
     markSupabaseTablesReady(false)
 
     return NextResponse.json({

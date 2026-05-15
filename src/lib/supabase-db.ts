@@ -1,16 +1,13 @@
 /**
  * Supabase Database Service
- * Replaces Prisma/SQLite with Supabase PostgreSQL via the client SDK.
- *
- * Uses a local JSON config file for bootstrapping the Supabase connection.
- * When Supabase is not configured, falls back to Prisma/SQLite.
+ * Uses Supabase PostgreSQL as the ONLY database via the client SDK.
+ * Configuration is stored in a local JSON file and/or environment variables.
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { db } from '@/lib/db'
 import { randomUUID } from 'crypto'
 import { join } from 'path'
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 
 // ─── Config Management ─────────────────────────────────────────────────────
 
@@ -18,10 +15,10 @@ interface SupabaseDbConfig {
   url: string
   anonKey: string
   isConfigured: boolean
-  tablesReady: boolean  // true when all required tables exist in Supabase
+  tablesReady: boolean
 }
 
-// In-memory config cache (avoids fs issues with bundlers)
+// In-memory config cache
 let cachedConfig: SupabaseDbConfig | null = null
 
 function getConfigPath(): string {
@@ -35,6 +32,7 @@ function getConfigPath(): string {
 function readConfig(): SupabaseDbConfig {
   if (cachedConfig) return cachedConfig
 
+  // First try the JSON config file
   try {
     const configPath = getConfigPath()
     if (configPath && existsSync(configPath)) {
@@ -45,6 +43,21 @@ function readConfig(): SupabaseDbConfig {
   } catch {
     // ignore
   }
+
+  // Fallback to environment variables
+  const envUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const envKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (envUrl && envKey) {
+    const config: SupabaseDbConfig = {
+      url: envUrl,
+      anonKey: envKey,
+      isConfigured: true,
+      tablesReady: true, // Assume tables are ready if env vars are set
+    }
+    cachedConfig = config
+    return config
+  }
+
   return { url: '', anonKey: '', isConfigured: false, tablesReady: false }
 }
 
@@ -53,6 +66,11 @@ function writeConfig(config: SupabaseDbConfig): void {
   try {
     const configPath = getConfigPath()
     if (configPath) {
+      // Ensure data directory exists
+      const dataDir = join(process.cwd(), 'data')
+      if (!existsSync(dataDir)) {
+        mkdirSync(dataDir, { recursive: true })
+      }
       writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
     }
   } catch (err) {
@@ -66,15 +84,11 @@ let supabaseInstance: SupabaseClient | null = null
 let lastConfigUrl = ''
 let lastConfigKey = ''
 
-function getSupabaseClient(): SupabaseClient | null {
+function getSupabaseClient(): SupabaseClient {
   const config = readConfig()
 
-  if (!config.isConfigured || !config.url || !config.anonKey || !config.tablesReady) {
-    return null
-  }
-
   // Re-create client if config changed
-  if (config.url !== lastConfigUrl || config.anonKey !== lastConfigKey) {
+  if (!supabaseInstance || config.url !== lastConfigUrl || config.anonKey !== lastConfigKey) {
     supabaseInstance = createClient(config.url, config.anonKey, {
       auth: { persistSession: false },
     })
@@ -87,15 +101,11 @@ function getSupabaseClient(): SupabaseClient | null {
 
 /**
  * Get Supabase client even if tables aren't ready yet.
- * Used by setup/verify endpoints to check table existence.
+ * Used by setup/verify endpoints.
  */
 function getSupabaseClientRaw(): SupabaseClient | null {
   const config = readConfig()
-
-  if (!config.isConfigured || !config.url || !config.anonKey) {
-    return null
-  }
-
+  if (!config.url || !config.anonKey) return null
   return createClient(config.url, config.anonKey, {
     auth: { persistSession: false },
   })
@@ -103,7 +113,6 @@ function getSupabaseClientRaw(): SupabaseClient | null {
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
-// Snake_case types for Supabase tables
 interface NotificationRow {
   id: string
   app_name: string
@@ -147,17 +156,6 @@ interface PushLogRow {
   response_body: string | null
   error_message: string | null
   pushed_at: string
-}
-
-interface AirtableConfigRow {
-  id: string
-  base_url: string
-  base_id: string
-  token: string
-  table_name: string
-  is_active: boolean
-  created_at: string
-  updated_at: string
 }
 
 // ─── Converters (Supabase snake_case ↔ App camelCase) ──────────────────────
@@ -222,19 +220,6 @@ function pushLogToApp(row: PushLogRow & { notification?: NotificationRow }) {
   }
 }
 
-function airtableConfigToApp(row: AirtableConfigRow) {
-  return {
-    id: row.id,
-    baseUrl: row.base_url,
-    baseId: row.base_id,
-    token: row.token,
-    tableName: row.table_name,
-    isActive: row.is_active,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }
-}
-
 // ─── SQL for Table Creation ────────────────────────────────────────────────
 
 export const SUPABASE_SETUP_SQL = `
@@ -287,38 +272,23 @@ CREATE TABLE IF NOT EXISTS push_logs (
   pushed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Airtable config table
-CREATE TABLE IF NOT EXISTS airtable_configs (
-  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  base_url TEXT NOT NULL,
-  base_id TEXT NOT NULL,
-  token TEXT NOT NULL,
-  table_name TEXT NOT NULL DEFAULT 'Notifications',
-  is_active BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
 -- Enable RLS but allow anon access (for the publishable key)
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE filter_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE push_configs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE push_logs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE airtable_configs ENABLE ROW LEVEL SECURITY;
 
 -- Allow anon role full access to all tables
 CREATE POLICY "Allow anon full access to notifications" ON notifications FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow anon full access to filter_rules" ON filter_rules FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow anon full access to push_configs" ON push_configs FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow anon full access to push_logs" ON push_logs FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow anon full access to airtable_configs" ON airtable_configs FOR ALL USING (true) WITH CHECK (true);
 
 -- Also allow authenticated role
 CREATE POLICY "Allow authenticated full access to notifications" ON notifications FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow authenticated full access to filter_rules" ON filter_rules FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow authenticated full access to push_configs" ON push_configs FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow authenticated full access to push_logs" ON push_logs FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow authenticated full access to airtable_configs" ON airtable_configs FOR ALL USING (true) WITH CHECK (true);
 
 -- updated_at trigger function
 CREATE OR REPLACE FUNCTION update_updated_at()
@@ -338,15 +308,12 @@ CREATE TRIGGER filter_rules_updated_at BEFORE UPDATE ON filter_rules FOR EACH RO
 
 DROP TRIGGER IF EXISTS push_configs_updated_at ON push_configs;
 CREATE TRIGGER push_configs_updated_at BEFORE UPDATE ON push_configs FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-
-DROP TRIGGER IF EXISTS airtable_configs_updated_at ON airtable_configs;
-CREATE TRIGGER airtable_configs_updated_at BEFORE UPDATE ON airtable_configs FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 `
 
-// ─── Database Service ──────────────────────────────────────────────────────
+// ─── Database Status ───────────────────────────────────────────────────────
 
 /**
- * Check if Supabase is configured (URL + key saved).
+ * Check if Supabase is configured (URL + key available).
  */
 export function isSupabaseConfigured(): boolean {
   const config = readConfig()
@@ -370,25 +337,20 @@ export function getSupabaseDbConfig(): SupabaseDbConfig {
 
 /**
  * Save Supabase configuration and test the connection.
- * Also checks if tables exist and sets tablesReady accordingly.
  */
 export async function saveSupabaseDbConfig(url: string, anonKey: string): Promise<{ ok: boolean; error?: string; tablesReady?: boolean }> {
-  // Test the connection first
   let tablesReady = false
   try {
     const testClient = createClient(url, anonKey, {
       auth: { persistSession: false },
     })
 
-    // Try to select from notifications table
     const { error } = await testClient
       .from('notifications')
       .select('id')
       .limit(1)
 
     if (error) {
-      // If table doesn't exist yet, that's OK - the connection still works
-      // We just need the Supabase URL and key to be valid
       const isMissingTable =
         error.message.includes('does not exist') ||
         error.message.includes('not found') ||
@@ -400,9 +362,7 @@ export async function saveSupabaseDbConfig(url: string, anonKey: string): Promis
       if (isAuthError) {
         return { ok: false, error: `Connection test failed: ${error.message}` }
       }
-      // Missing tables is OK — connection works, just not ready yet
       if (!isMissingTable) {
-        // Some other error — could be network issue
         console.warn('[SupabaseDB] Non-critical error during save:', error.message)
       }
     } else {
@@ -413,7 +373,6 @@ export async function saveSupabaseDbConfig(url: string, anonKey: string): Promis
     return { ok: false, error: `Failed to connect: ${msg}` }
   }
 
-  // Save the config
   const config: SupabaseDbConfig = {
     url,
     anonKey,
@@ -421,8 +380,6 @@ export async function saveSupabaseDbConfig(url: string, anonKey: string): Promis
     tablesReady,
   }
   writeConfig(config)
-
-  // Reset the singleton so next call creates a new client
   supabaseInstance = null
   lastConfigUrl = ''
   lastConfigKey = ''
@@ -431,7 +388,7 @@ export async function saveSupabaseDbConfig(url: string, anonKey: string): Promis
 }
 
 /**
- * Remove Supabase configuration (fall back to Prisma/SQLite).
+ * Remove Supabase configuration.
  */
 export function removeSupabaseDbConfig(): void {
   writeConfig({ url: '', anonKey: '', isConfigured: false, tablesReady: false })
@@ -441,7 +398,7 @@ export function removeSupabaseDbConfig(): void {
 }
 
 /**
- * Mark Supabase tables as ready (called after tables are verified to exist).
+ * Mark Supabase tables as ready.
  */
 export function markSupabaseTablesReady(ready: boolean): void {
   const config = readConfig()
@@ -453,7 +410,7 @@ export function markSupabaseTablesReady(ready: boolean): void {
 }
 
 /**
- * Test the Supabase connection (uses raw client, bypasses tablesReady check).
+ * Test the Supabase connection.
  */
 export async function testSupabaseDbConnection(): Promise<{ ok: boolean; error?: string; tablesExist?: boolean }> {
   const client = getSupabaseClientRaw()
@@ -462,7 +419,6 @@ export async function testSupabaseDbConnection(): Promise<{ ok: boolean; error?:
   }
 
   try {
-    // Check if notifications table exists
     const { error } = await client
       .from('notifications')
       .select('id')
@@ -499,71 +455,52 @@ export async function getNotifications(filters?: {
 }): Promise<any[]> {
   const client = getSupabaseClient()
 
-  if (client) {
-    let query = client
-      .from('notifications')
-      .select('*')
-      .order('created_at', { ascending: false })
+  let query = client
+    .from('notifications')
+    .select('*')
+    .order('created_at', { ascending: false })
 
-    if (filters?.isFiltered !== undefined) query = query.eq('is_filtered', filters.isFiltered)
-    if (filters?.isRead !== undefined) query = query.eq('is_read', filters.isRead)
-    if (filters?.isPushed !== undefined) query = query.eq('is_pushed', filters.isPushed)
+  if (filters?.isFiltered !== undefined) query = query.eq('is_filtered', filters.isFiltered)
+  if (filters?.isRead !== undefined) query = query.eq('is_read', filters.isRead)
+  if (filters?.isPushed !== undefined) query = query.eq('is_pushed', filters.isPushed)
 
-    const { data, error } = await query
+  const { data, error } = await query
 
-    if (error) {
-      console.error('[SupabaseDB] Error fetching notifications:', error)
-      throw new Error(error.message)
-    }
-
-    let results = (data as NotificationRow[]).map(notifToApp)
-
-    // Client-side search filter (Supabase doesn't support OR contains easily)
-    if (filters?.search) {
-      const q = filters.search.toLowerCase()
-      results = results.filter(n =>
-        n.title.toLowerCase().includes(q) ||
-        n.message.toLowerCase().includes(q) ||
-        n.appName.toLowerCase().includes(q)
-      )
-    }
-
-    return results
+  if (error) {
+    console.error('[SupabaseDB] Error fetching notifications:', error)
+    throw new Error(error.message)
   }
 
-  // Fallback to Prisma
-  const where: Record<string, unknown> = {}
-  if (filters?.isFiltered !== undefined) where.isFiltered = filters.isFiltered
-  if (filters?.isRead !== undefined) where.isRead = filters.isRead
-  if (filters?.isPushed !== undefined) where.isPushed = filters.isPushed
+  let results = (data as NotificationRow[]).map(notifToApp)
+
+  // Client-side search filter
   if (filters?.search) {
-    where.OR = [
-      { title: { contains: filters.search } },
-      { message: { contains: filters.search } },
-    ]
+    const q = filters.search.toLowerCase()
+    results = results.filter(n =>
+      n.title.toLowerCase().includes(q) ||
+      n.message.toLowerCase().includes(q) ||
+      n.appName.toLowerCase().includes(q)
+    )
   }
-  return db.notification.findMany({ where, orderBy: { createdAt: 'desc' } })
+
+  return results
 }
 
 export async function getNotificationById(id: string): Promise<any | null> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const { data, error } = await client
-      .from('notifications')
-      .select('*')
-      .eq('id', id)
-      .single()
+  const { data, error } = await client
+    .from('notifications')
+    .select('*')
+    .eq('id', id)
+    .single()
 
-    if (error) {
-      if (error.code === 'PGRST116') return null // not found
-      throw new Error(error.message)
-    }
-
-    return notifToApp(data as NotificationRow)
+  if (error) {
+    if (error.code === 'PGRST116') return null
+    throw new Error(error.message)
   }
 
-  return db.notification.findUnique({ where: { id } })
+  return notifToApp(data as NotificationRow)
 }
 
 export async function createNotification(data: {
@@ -575,76 +512,63 @@ export async function createNotification(data: {
 }): Promise<any> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const row: NotificationRow = {
-      id: randomUUID(),
-      app_name: data.appName || 'Unknown',
-      title: data.title,
-      message: data.message,
-      prefix: data.prefix,
-      is_read: false,
-      is_filtered: data.isFiltered,
-      is_pushed: false,
-      push_status: 'pending',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }
-
-    const { data: result, error } = await client
-      .from('notifications')
-      .insert(row)
-      .select()
-      .single()
-
-    if (error) throw new Error(error.message)
-
-    return notifToApp(result as NotificationRow)
+  const row: NotificationRow = {
+    id: randomUUID(),
+    app_name: data.appName || 'Unknown',
+    title: data.title,
+    message: data.message,
+    prefix: data.prefix,
+    is_read: false,
+    is_filtered: data.isFiltered,
+    is_pushed: false,
+    push_status: 'pending',
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
   }
 
-  return db.notification.create({ data })
+  const { data: result, error } = await client
+    .from('notifications')
+    .insert(row)
+    .select()
+    .single()
+
+  if (error) throw new Error(error.message)
+
+  return notifToApp(result as NotificationRow)
 }
 
 export async function updateNotification(id: string, data: Record<string, unknown>): Promise<any> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const row: Record<string, unknown> = {}
+  const row: Record<string, unknown> = {}
 
-    if (data.isRead !== undefined) row.is_read = data.isRead
-    if (data.isFiltered !== undefined) row.is_filtered = data.isFiltered
-    if (data.isPushed !== undefined) row.is_pushed = data.isPushed
-    if (data.pushStatus !== undefined) row.push_status = data.pushStatus
-    if (data.prefix !== undefined) row.prefix = data.prefix
+  if (data.isRead !== undefined) row.is_read = data.isRead
+  if (data.isFiltered !== undefined) row.is_filtered = data.isFiltered
+  if (data.isPushed !== undefined) row.is_pushed = data.isPushed
+  if (data.pushStatus !== undefined) row.push_status = data.pushStatus
+  if (data.prefix !== undefined) row.prefix = data.prefix
 
-    const { data: result, error } = await client
-      .from('notifications')
-      .update(row)
-      .eq('id', id)
-      .select()
-      .single()
+  const { data: result, error } = await client
+    .from('notifications')
+    .update(row)
+    .eq('id', id)
+    .select()
+    .single()
 
-    if (error) throw new Error(error.message)
+  if (error) throw new Error(error.message)
 
-    return notifToApp(result as NotificationRow)
-  }
-
-  return db.notification.update({ where: { id }, data })
+  return notifToApp(result as NotificationRow)
 }
 
 export async function deleteNotification(id: string): Promise<void> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const { error } = await client
-      .from('notifications')
-      .delete()
-      .eq('id', id)
+  const { error } = await client
+    .from('notifications')
+    .delete()
+    .eq('id', id)
 
-    if (error) throw new Error(error.message)
-    return
-  }
-
-  await db.notification.delete({ where: { id } })
+  if (error) throw new Error(error.message)
 }
 
 // ─── Filter Rules ──────────────────────────────────────────────────────────
@@ -652,77 +576,61 @@ export async function deleteNotification(id: string): Promise<void> {
 export async function getFilterRules(): Promise<any[]> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const { data, error } = await client
-      .from('filter_rules')
-      .select('*')
-      .order('created_at', { ascending: false })
+  const { data, error } = await client
+    .from('filter_rules')
+    .select('*')
+    .order('created_at', { ascending: false })
 
-    if (error) throw new Error(error.message)
+  if (error) throw new Error(error.message)
 
-    return (data as FilterRuleRow[]).map(ruleToApp)
-  }
-
-  return db.filterRule.findMany({ orderBy: { createdAt: 'desc' } })
+  return (data as FilterRuleRow[]).map(ruleToApp)
 }
 
 export async function getActiveFilterRules(): Promise<any[]> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const { data, error } = await client
-      .from('filter_rules')
-      .select('*')
-      .eq('is_active', true)
+  const { data, error } = await client
+    .from('filter_rules')
+    .select('*')
+    .eq('is_active', true)
 
-    if (error) throw new Error(error.message)
+  if (error) throw new Error(error.message)
 
-    return (data as FilterRuleRow[]).map(ruleToApp)
-  }
-
-  return db.filterRule.findMany({ where: { isActive: true } })
+  return (data as FilterRuleRow[]).map(ruleToApp)
 }
 
 export async function getFilterRuleByPrefix(prefix: string): Promise<any | null> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const { data, error } = await client
-      .from('filter_rules')
-      .select('*')
-      .eq('prefix', prefix)
-      .single()
+  const { data, error } = await client
+    .from('filter_rules')
+    .select('*')
+    .eq('prefix', prefix)
+    .single()
 
-    if (error) {
-      if (error.code === 'PGRST116') return null
-      throw new Error(error.message)
-    }
-
-    return ruleToApp(data as FilterRuleRow)
+  if (error) {
+    if (error.code === 'PGRST116') return null
+    throw new Error(error.message)
   }
 
-  return db.filterRule.findUnique({ where: { prefix } })
+  return ruleToApp(data as FilterRuleRow)
 }
 
 export async function getFilterRuleById(id: string): Promise<any | null> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const { data, error } = await client
-      .from('filter_rules')
-      .select('*')
-      .eq('id', id)
-      .single()
+  const { data, error } = await client
+    .from('filter_rules')
+    .select('*')
+    .eq('id', id)
+    .single()
 
-    if (error) {
-      if (error.code === 'PGRST116') return null
-      throw new Error(error.message)
-    }
-
-    return ruleToApp(data as FilterRuleRow)
+  if (error) {
+    if (error.code === 'PGRST116') return null
+    throw new Error(error.message)
   }
 
-  return db.filterRule.findUnique({ where: { id } })
+  return ruleToApp(data as FilterRuleRow)
 }
 
 export async function createFilterRule(data: {
@@ -732,79 +640,66 @@ export async function createFilterRule(data: {
 }): Promise<any> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const row: FilterRuleRow = {
-      id: randomUUID(),
-      prefix: data.prefix,
-      match_mode: data.matchMode,
-      is_active: data.isActive !== undefined ? data.isActive : true,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }
-
-    const { data: result, error } = await client
-      .from('filter_rules')
-      .insert(row)
-      .select()
-      .single()
-
-    if (error) {
-      if (error.message.includes('duplicate') || error.message.includes('unique')) {
-        throw new Error('DUPLICATE_PREFIX')
-      }
-      throw new Error(error.message)
-    }
-
-    return ruleToApp(result as FilterRuleRow)
+  const row: FilterRuleRow = {
+    id: randomUUID(),
+    prefix: data.prefix,
+    match_mode: data.matchMode,
+    is_active: data.isActive !== undefined ? data.isActive : true,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
   }
 
-  return db.filterRule.create({ data })
+  const { data: result, error } = await client
+    .from('filter_rules')
+    .insert(row)
+    .select()
+    .single()
+
+  if (error) {
+    if (error.message.includes('duplicate') || error.message.includes('unique')) {
+      throw new Error('DUPLICATE_PREFIX')
+    }
+    throw new Error(error.message)
+  }
+
+  return ruleToApp(result as FilterRuleRow)
 }
 
 export async function updateFilterRule(id: string, data: Record<string, unknown>): Promise<any> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const row: Record<string, unknown> = {}
+  const row: Record<string, unknown> = {}
 
-    if (data.prefix !== undefined) row.prefix = data.prefix
-    if (data.matchMode !== undefined) row.match_mode = data.matchMode
-    if (data.isActive !== undefined) row.is_active = data.isActive
+  if (data.prefix !== undefined) row.prefix = data.prefix
+  if (data.matchMode !== undefined) row.match_mode = data.matchMode
+  if (data.isActive !== undefined) row.is_active = data.isActive
 
-    const { data: result, error } = await client
-      .from('filter_rules')
-      .update(row)
-      .eq('id', id)
-      .select()
-      .single()
+  const { data: result, error } = await client
+    .from('filter_rules')
+    .update(row)
+    .eq('id', id)
+    .select()
+    .single()
 
-    if (error) {
-      if (error.message.includes('duplicate') || error.message.includes('unique')) {
-        throw new Error('DUPLICATE_PREFIX')
-      }
-      throw new Error(error.message)
+  if (error) {
+    if (error.message.includes('duplicate') || error.message.includes('unique')) {
+      throw new Error('DUPLICATE_PREFIX')
     }
-
-    return ruleToApp(result as FilterRuleRow)
+    throw new Error(error.message)
   }
 
-  return db.filterRule.update({ where: { id }, data })
+  return ruleToApp(result as FilterRuleRow)
 }
 
 export async function deleteFilterRule(id: string): Promise<void> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const { error } = await client
-      .from('filter_rules')
-      .delete()
-      .eq('id', id)
+  const { error } = await client
+    .from('filter_rules')
+    .delete()
+    .eq('id', id)
 
-    if (error) throw new Error(error.message)
-    return
-  }
-
-  await db.filterRule.delete({ where: { id } })
+  if (error) throw new Error(error.message)
 }
 
 // ─── Push Configs ──────────────────────────────────────────────────────────
@@ -812,56 +707,44 @@ export async function deleteFilterRule(id: string): Promise<void> {
 export async function getPushConfigs(): Promise<any[]> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const { data, error } = await client
-      .from('push_configs')
-      .select('*')
-      .order('created_at', { ascending: false })
+  const { data, error } = await client
+    .from('push_configs')
+    .select('*')
+    .order('created_at', { ascending: false })
 
-    if (error) throw new Error(error.message)
+  if (error) throw new Error(error.message)
 
-    return (data as PushConfigRow[]).map(pushConfigToApp)
-  }
-
-  return db.pushConfig.findMany({ orderBy: { createdAt: 'desc' } })
+  return (data as PushConfigRow[]).map(pushConfigToApp)
 }
 
 export async function getActivePushConfigs(): Promise<any[]> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const { data, error } = await client
-      .from('push_configs')
-      .select('*')
-      .eq('is_active', true)
+  const { data, error } = await client
+    .from('push_configs')
+    .select('*')
+    .eq('is_active', true)
 
-    if (error) throw new Error(error.message)
+  if (error) throw new Error(error.message)
 
-    return (data as PushConfigRow[]).map(pushConfigToApp)
-  }
-
-  return db.pushConfig.findMany({ where: { isActive: true } })
+  return (data as PushConfigRow[]).map(pushConfigToApp)
 }
 
 export async function getPushConfigById(id: string): Promise<any | null> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const { data, error } = await client
-      .from('push_configs')
-      .select('*')
-      .eq('id', id)
-      .single()
+  const { data, error } = await client
+    .from('push_configs')
+    .select('*')
+    .eq('id', id)
+    .single()
 
-    if (error) {
-      if (error.code === 'PGRST116') return null
-      throw new Error(error.message)
-    }
-
-    return pushConfigToApp(data as PushConfigRow)
+  if (error) {
+    if (error.code === 'PGRST116') return null
+    throw new Error(error.message)
   }
 
-  return db.pushConfig.findUnique({ where: { id } })
+  return pushConfigToApp(data as PushConfigRow)
 }
 
 export async function createPushConfig(data: {
@@ -871,73 +754,60 @@ export async function createPushConfig(data: {
 }): Promise<any> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const row: PushConfigRow = {
-      id: randomUUID(),
-      url: data.url,
-      method: data.method || 'POST',
-      headers: data.headers || '{}',
-      is_active: true,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }
-
-    const { data: result, error } = await client
-      .from('push_configs')
-      .insert(row)
-      .select()
-      .single()
-
-    if (error) throw new Error(error.message)
-
-    return pushConfigToApp(result as PushConfigRow)
+  const row: PushConfigRow = {
+    id: randomUUID(),
+    url: data.url,
+    method: data.method || 'POST',
+    headers: data.headers || '{}',
+    is_active: true,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
   }
 
-  return db.pushConfig.create({ data })
+  const { data: result, error } = await client
+    .from('push_configs')
+    .insert(row)
+    .select()
+    .single()
+
+  if (error) throw new Error(error.message)
+
+  return pushConfigToApp(result as PushConfigRow)
 }
 
 export async function updatePushConfig(id: string, data: Record<string, unknown>): Promise<any> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const row: Record<string, unknown> = {}
+  const row: Record<string, unknown> = {}
 
-    if (data.url !== undefined) row.url = data.url
-    if (data.method !== undefined) row.method = data.method
-    if (data.headers !== undefined) {
-      row.headers = typeof data.headers === 'string' ? data.headers : JSON.stringify(data.headers)
-    }
-    if (data.isActive !== undefined) row.is_active = data.isActive
-
-    const { data: result, error } = await client
-      .from('push_configs')
-      .update(row)
-      .eq('id', id)
-      .select()
-      .single()
-
-    if (error) throw new Error(error.message)
-
-    return pushConfigToApp(result as PushConfigRow)
+  if (data.url !== undefined) row.url = data.url
+  if (data.method !== undefined) row.method = data.method
+  if (data.headers !== undefined) {
+    row.headers = typeof data.headers === 'string' ? data.headers : JSON.stringify(data.headers)
   }
+  if (data.isActive !== undefined) row.is_active = data.isActive
 
-  return db.pushConfig.update({ where: { id }, data })
+  const { data: result, error } = await client
+    .from('push_configs')
+    .update(row)
+    .eq('id', id)
+    .select()
+    .single()
+
+  if (error) throw new Error(error.message)
+
+  return pushConfigToApp(result as PushConfigRow)
 }
 
 export async function deletePushConfig(id: string): Promise<void> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const { error } = await client
-      .from('push_configs')
-      .delete()
-      .eq('id', id)
+  const { error } = await client
+    .from('push_configs')
+    .delete()
+    .eq('id', id)
 
-    if (error) throw new Error(error.message)
-    return
-  }
-
-  await db.pushConfig.delete({ where: { id } })
+  if (error) throw new Error(error.message)
 }
 
 // ─── Push Logs ─────────────────────────────────────────────────────────────
@@ -945,27 +815,15 @@ export async function deletePushConfig(id: string): Promise<void> {
 export async function getPushLogs(limit: number = 50): Promise<any[]> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const { data, error } = await client
-      .from('push_logs')
-      .select('*, notification:notifications(id, app_name, title, message, prefix)')
-      .order('pushed_at', { ascending: false })
-      .limit(limit)
+  const { data, error } = await client
+    .from('push_logs')
+    .select('*, notification:notifications(id, app_name, title, message, prefix)')
+    .order('pushed_at', { ascending: false })
+    .limit(limit)
 
-    if (error) throw new Error(error.message)
+  if (error) throw new Error(error.message)
 
-    return (data as (PushLogRow & { notification: NotificationRow })[]).map(pushLogToApp)
-  }
-
-  return db.pushLog.findMany({
-    orderBy: { pushedAt: 'desc' },
-    take: limit,
-    include: {
-      notification: {
-        select: { id: true, appName: true, title: true, message: true, prefix: true },
-      },
-    },
-  })
+  return (data as (PushLogRow & { notification: NotificationRow })[]).map(pushLogToApp)
 }
 
 export async function createPushLog(data: {
@@ -979,189 +837,27 @@ export async function createPushLog(data: {
 }): Promise<any> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const row: PushLogRow = {
-      id: randomUUID(),
-      notification_id: data.notificationId,
-      push_config_id: data.pushConfigId ?? null,
-      status: data.status,
-      request_body: data.requestBody || '{}',
-      response_status: data.responseStatus ?? null,
-      response_body: data.responseBody ?? null,
-      error_message: data.errorMessage ?? null,
-      pushed_at: new Date().toISOString(),
-    }
-
-    const { data: result, error } = await client
-      .from('push_logs')
-      .insert(row)
-      .select()
-      .single()
-
-    if (error) throw new Error(error.message)
-
-    return pushLogToApp(result as PushLogRow)
+  const row: PushLogRow = {
+    id: randomUUID(),
+    notification_id: data.notificationId,
+    push_config_id: data.pushConfigId ?? null,
+    status: data.status,
+    request_body: data.requestBody || '{}',
+    response_status: data.responseStatus ?? null,
+    response_body: data.responseBody ?? null,
+    error_message: data.errorMessage ?? null,
+    pushed_at: new Date().toISOString(),
   }
 
-  return db.pushLog.create({ data })
-}
+  const { data: result, error } = await client
+    .from('push_logs')
+    .insert(row)
+    .select()
+    .single()
 
-// ─── Airtable Config ───────────────────────────────────────────────────────
+  if (error) throw new Error(error.message)
 
-export async function getAirtableConfig(): Promise<any | null> {
-  const client = getSupabaseClient()
-
-  if (client) {
-    const { data, error } = await client
-      .from('airtable_configs')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(1)
-
-    if (error) throw new Error(error.message)
-    if (!data || data.length === 0) return null
-
-    return airtableConfigToApp(data[0] as AirtableConfigRow)
-  }
-
-  return db.airtableConfig.findFirst()
-}
-
-export async function getAllAirtableConfigs(): Promise<any[]> {
-  const client = getSupabaseClient()
-
-  if (client) {
-    const { data, error } = await client
-      .from('airtable_configs')
-      .select('*')
-      .order('created_at', { ascending: false })
-
-    if (error) throw new Error(error.message)
-
-    return (data as AirtableConfigRow[]).map(airtableConfigToApp)
-  }
-
-  return db.airtableConfig.findMany({ orderBy: { createdAt: 'desc' } })
-}
-
-export async function saveAirtableConfig(data: {
-  baseUrl: string
-  baseId: string
-  token: string
-  tableName: string
-  isActive?: boolean
-}): Promise<any> {
-  const client = getSupabaseClient()
-
-  if (client) {
-    // Check if config exists
-    const existing = await getAirtableConfig()
-
-    if (existing) {
-      // If token contains "..." it means the user didn't change it, keep the old one
-      const actualToken = data.token.includes('...') ? existing.token : data.token
-
-      const row: Record<string, unknown> = {
-        base_url: data.baseUrl,
-        base_id: data.baseId,
-        token: actualToken,
-        table_name: data.tableName,
-        is_active: data.isActive !== undefined ? data.isActive : true,
-      }
-
-      const { data: result, error } = await client
-        .from('airtable_configs')
-        .update(row)
-        .eq('id', existing.id)
-        .select()
-        .single()
-
-      if (error) throw new Error(error.message)
-      return airtableConfigToApp(result as AirtableConfigRow)
-    }
-
-    // Create new
-    const row: AirtableConfigRow = {
-      id: randomUUID(),
-      base_url: data.baseUrl,
-      base_id: data.baseId,
-      token: data.token,
-      table_name: data.tableName,
-      is_active: data.isActive !== undefined ? data.isActive : true,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }
-
-    const { data: result, error } = await client
-      .from('airtable_configs')
-      .insert(row)
-      .select()
-      .single()
-
-    if (error) throw new Error(error.message)
-    return airtableConfigToApp(result as AirtableConfigRow)
-  }
-
-  // Prisma fallback
-  const existing = await db.airtableConfig.findFirst()
-  if (existing) {
-    const actualToken = data.token.includes('...') ? existing.token : data.token
-    return db.airtableConfig.update({
-      where: { id: existing.id },
-      data: {
-        baseUrl: data.baseUrl,
-        baseId: data.baseId,
-        token: actualToken,
-        tableName: data.tableName,
-        isActive: data.isActive !== undefined ? data.isActive : true,
-      },
-    })
-  }
-
-  return db.airtableConfig.create({
-    data: {
-      baseUrl: data.baseUrl,
-      baseId: data.baseId,
-      token: data.token,
-      tableName: data.tableName,
-      isActive: data.isActive !== undefined ? data.isActive : true,
-    },
-  })
-}
-
-export async function deleteAirtableConfig(): Promise<void> {
-  const client = getSupabaseClient()
-
-  if (client) {
-    const existing = await getAirtableConfig()
-    if (existing) {
-      const { error } = await client
-        .from('airtable_configs')
-        .delete()
-        .eq('id', existing.id)
-
-      if (error) throw new Error(error.message)
-    }
-    return
-  }
-
-  const existing = await db.airtableConfig.findFirst()
-  if (existing) {
-    await db.airtableConfig.delete({ where: { id: existing.id } })
-  }
-}
-
-// ─── Supabase Config (for push, stored in the local JSON file) ─────────────
-
-export async function getSupabasePushConfig(): Promise<any | null> {
-  const config = readConfig()
-  if (!config.isConfigured) return null
-  return {
-    id: 'local-config',
-    url: config.url,
-    anonKey: config.anonKey,
-    isActive: true,
-  }
+  return pushLogToApp(result as PushLogRow)
 }
 
 // ─── Bulk helpers ──────────────────────────────────────────────────────────
@@ -1173,21 +869,14 @@ export async function getUnfilteredNotifications(): Promise<any[]> {
 export async function getFilteredUnpushedNotifications(): Promise<any[]> {
   const client = getSupabaseClient()
 
-  if (client) {
-    const { data, error } = await client
-      .from('notifications')
-      .select('*')
-      .eq('is_filtered', true)
-      .eq('is_pushed', false)
-      .order('created_at', { ascending: true })
+  const { data, error } = await client
+    .from('notifications')
+    .select('*')
+    .eq('is_filtered', true)
+    .eq('is_pushed', false)
+    .order('created_at', { ascending: true })
 
-    if (error) throw new Error(error.message)
+  if (error) throw new Error(error.message)
 
-    return (data as NotificationRow[]).map(notifToApp)
-  }
-
-  return db.notification.findMany({
-    where: { isFiltered: true, isPushed: false },
-    orderBy: { createdAt: 'asc' },
-  })
+  return (data as NotificationRow[]).map(notifToApp)
 }

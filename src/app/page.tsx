@@ -24,17 +24,17 @@ import {
   Clock,
   Mail,
   MailOpen,
-  ArrowUpRight,
   Wifi,
   WifiOff,
   Radio,
   Database,
   Server,
   Copy,
+  ExternalLink,
 } from 'lucide-react'
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -60,7 +60,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 
-// ─── Types (aligned with Prisma schema) ─────────────────────────────────────
+// ─── Types ──────────────────────────────────────────────────────────────────
 
 interface NotificationItem {
   id: string
@@ -79,7 +79,7 @@ interface NotificationItem {
 interface FilterRuleItem {
   id: string
   prefix: string
-  matchMode: string // "startsWith" or "contains"
+  matchMode: string
   isActive: boolean
   createdAt: string
   updatedAt: string
@@ -144,6 +144,11 @@ function tryParseJson(str: string): string {
   }
 }
 
+function maskKey(key: string): string {
+  if (!key || key.length < 12) return key
+  return key.slice(0, 8) + '...' + key.slice(-4)
+}
+
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 export default function Home() {
@@ -171,28 +176,14 @@ export default function Home() {
   const [isWsConnected, setIsWsConnected] = useState(false)
   const socketRef = useRef<ReturnType<typeof io> | null>(null)
 
-  // Settings forms
+  // Settings forms - Filter Rules
   const [newRulePrefix, setNewRulePrefix] = useState('')
   const [newRuleMatchMode, setNewRuleMatchMode] = useState<'contains' | 'startsWith'>('contains')
+
+  // Settings forms - Push Config
   const [newConfigUrl, setNewConfigUrl] = useState('')
   const [newConfigMethod, setNewConfigMethod] = useState<'POST' | 'GET'>('POST')
   const [newConfigHeaders, setNewConfigHeaders] = useState('')
-
-  // Airtable integration state
-  const [airtableConfig, setAirtableConfig] = useState<{
-    id: string
-    baseUrl: string
-    baseId: string
-    token: string
-    tableName: string
-    isActive: boolean
-  } | null>(null)
-  const [atBaseUrl, setAtBaseUrl] = useState('https://airtable.com/appS02vV9NX6QERC7')
-  const [atBaseId, setAtBaseId] = useState('appS02vV9NX6QERC7')
-  const [atToken, setAtToken] = useState('')
-  const [atTableName, setAtTableName] = useState('Notifications')
-  const [atTesting, setAtTesting] = useState(false)
-  const [atSaving, setAtSaving] = useState(false)
 
   // Supabase integration state
   const [supabaseConfig, setSupabaseConfig] = useState<{
@@ -202,11 +193,11 @@ export default function Home() {
     isActive: boolean
   } | null>(null)
   const [sbUrl, setSbUrl] = useState('')
-  const [sbAnonKey, setSbAnonKey] = useState('sb_publishable_u02JQcPqBnXCOGek5Hgm7g_8gI9fpMT')
+  const [sbAnonKey, setSbAnonKey] = useState('')
   const [sbTesting, setSbTesting] = useState(false)
   const [sbSaving, setSbSaving] = useState(false)
   const [sbSetup, setSbSetup] = useState(false)
-  const [dbStatus, setDbStatus] = useState<'supabase' | 'local' | 'unknown'>('unknown')
+  const [dbStatus, setDbStatus] = useState<'supabase' | 'unknown'>('unknown')
   const [sbSetupSql, setSbSetupSql] = useState<string | null>(null)
   const [sbTablesExist, setSbTablesExist] = useState<boolean | null>(null)
   const [sbSqlEditorLink, setSbSqlEditorLink] = useState<string | null>(null)
@@ -263,47 +254,41 @@ export default function Home() {
     }
   }, [])
 
-  const fetchAirtableConfig = useCallback(async () => {
-    try {
-      const res = await fetch('/api/settings/airtable')
-      if (res.ok) {
-        const data = await res.json()
-        if (data.length > 0) {
-          setAirtableConfig(data[0])
-          setAtBaseUrl(data[0].baseUrl)
-          setAtBaseId(data[0].baseId)
-          setAtTableName(data[0].tableName)
-        }
-      }
-    } catch {
-      // API not yet available
-    }
-  }, [])
-
   const fetchSupabaseConfig = useCallback(async () => {
     try {
       const res = await fetch('/api/settings/supabase')
       if (res.ok) {
         const data = await res.json()
-        if (data.length > 0) {
-          setSupabaseConfig(data[0])
-          setSbUrl(data[0].url)
-          // If tables are ready, we're using Supabase; otherwise still using local
-          if (data[0].tablesReady) {
+        if (Array.isArray(data) && data.length > 0) {
+          const config = data[0]
+          setSupabaseConfig(config)
+          setSbUrl(config.url || '')
+          if (config.tablesReady) {
             setDbStatus('supabase')
             setSbTablesExist(true)
           } else {
-            setDbStatus('local')
+            setSbTablesExist(false)
+          }
+        } else if (data && !Array.isArray(data) && data.url) {
+          setSupabaseConfig(data)
+          setSbUrl(data.url || '')
+          if (data.tablesReady) {
+            setDbStatus('supabase')
+            setSbTablesExist(true)
+          } else {
             setSbTablesExist(false)
           }
         } else {
-          setDbStatus('local')
+          setDbStatus('unknown')
+          setSbTablesExist(null)
         }
       } else {
-        setDbStatus('local')
+        setDbStatus('unknown')
+        setSbTablesExist(null)
       }
     } catch {
-      setDbStatus('local')
+      setDbStatus('unknown')
+      setSbTablesExist(null)
     }
   }, [])
 
@@ -314,11 +299,10 @@ export default function Home() {
       fetchFilterRules(),
       fetchPushConfigs(),
       fetchPushLogs(),
-      fetchAirtableConfig(),
       fetchSupabaseConfig(),
     ])
     setLoading(false)
-  }, [fetchNotifications, fetchFilterRules, fetchPushConfigs, fetchPushLogs, fetchAirtableConfig, fetchSupabaseConfig])
+  }, [fetchNotifications, fetchFilterRules, fetchPushConfigs, fetchPushLogs, fetchSupabaseConfig])
 
   useEffect(() => {
     fetchAll()
@@ -380,7 +364,7 @@ export default function Home() {
     }
   }, [fetchNotifications, fetchPushLogs])
 
-  // ── Actions ────────────────────────────────────────────────────────────
+  // ── Notification Actions ────────────────────────────────────────────────
 
   const handleSimulate = async () => {
     setActionLoading('simulate')
@@ -484,6 +468,8 @@ export default function Home() {
     }
   }
 
+  // ── Filter Rule Actions ─────────────────────────────────────────────────
+
   const handleAddFilterRule = async () => {
     if (!newRulePrefix.trim()) {
       toast.error('Please enter a prefix')
@@ -549,6 +535,8 @@ export default function Home() {
       toast.error('Failed to connect to server')
     }
   }
+
+  // ── Push Config Actions ─────────────────────────────────────────────────
 
   const handleAddPushConfig = async () => {
     if (!newConfigUrl.trim()) {
@@ -617,107 +605,6 @@ export default function Home() {
     }
   }
 
-  // ── Airtable Actions ────────────────────────────────────────────────────
-
-  const handleSaveAirtable = async () => {
-    if (!atBaseId.trim() || !atToken.trim() || !atTableName.trim()) {
-      toast.error('Please fill in all Airtable fields')
-      return
-    }
-    setAtSaving(true)
-    try {
-      const res = await fetch('/api/settings/airtable', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          baseUrl: atBaseUrl.trim(),
-          baseId: atBaseId.trim(),
-          token: atToken.trim(),
-          tableName: atTableName.trim(),
-        }),
-      })
-      if (res.ok) {
-        toast.success(airtableConfig ? 'Airtable config updated!' : 'Airtable connected!')
-        setAtToken('')
-        await fetchAirtableConfig()
-      } else {
-        const data = await res.json().catch(() => ({}))
-        toast.error(data.error || 'Failed to save Airtable config')
-      }
-    } catch {
-      toast.error('Failed to connect to server')
-    } finally {
-      setAtSaving(false)
-    }
-  }
-
-  const handleTestAirtable = async () => {
-    setAtTesting(true)
-    try {
-      const res = await fetch('/api/settings/airtable/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      })
-      if (res.ok) {
-        const data = await res.json()
-        toast.success(data.message || 'Airtable connection successful!')
-      } else {
-        const data = await res.json().catch(() => ({}))
-        toast.error(data.error || 'Airtable connection failed')
-      }
-    } catch {
-      toast.error('Failed to test Airtable connection')
-    } finally {
-      setAtTesting(false)
-    }
-  }
-
-  const handleToggleAirtable = async (checked: boolean) => {
-    if (!airtableConfig) return
-    try {
-      const res = await fetch('/api/settings/airtable', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          baseUrl: airtableConfig.baseUrl,
-          baseId: airtableConfig.baseId,
-          token: airtableConfig.token,
-          tableName: airtableConfig.tableName,
-          isActive: checked,
-        }),
-      })
-      if (res.ok) {
-        setAirtableConfig((prev) => prev ? { ...prev, isActive: checked } : null)
-        toast.success(checked ? 'Airtable integration enabled' : 'Airtable integration disabled')
-      } else {
-        toast.error('Failed to update Airtable config')
-      }
-    } catch {
-      toast.error('Failed to connect to server')
-    }
-  }
-
-  const handleDeleteAirtable = async () => {
-    if (!airtableConfig) return
-    try {
-      const res = await fetch('/api/settings/airtable', {
-        method: 'DELETE',
-      })
-      if (res.ok) {
-        toast.success('Airtable config deleted')
-        setAirtableConfig(null)
-        setAtBaseUrl('https://airtable.com/appS02vV9NX6QERC7')
-        setAtBaseId('appS02vV9NX6QERC7')
-        setAtToken('')
-        setAtTableName('Notifications')
-      } else {
-        toast.error('Failed to delete Airtable config')
-      }
-    } catch {
-      toast.error('Failed to connect to server')
-    }
-  }
-
   // ── Supabase Actions ────────────────────────────────────────────────────
 
   const handleSaveSupabase = async () => {
@@ -743,15 +630,13 @@ export default function Home() {
             ? (supabaseConfig ? 'Supabase config updated!' : 'Supabase connected and ready!')
             : (supabaseConfig ? 'Supabase config updated! Tables still need setup.' : 'Supabase connected! Tables need to be created.')
         )
-        setSbAnonKey('sb_publishable_u02JQcPqBnXCOGek5Hgm7g_8gI9fpMT')
-        setDbStatus(isReady ? 'supabase' : 'local')
+        setSbAnonKey('')
+        setDbStatus(isReady ? 'supabase' : 'unknown')
         await fetchSupabaseConfig()
-        // Refresh all data from the new database
         await fetchNotifications()
         await fetchFilterRules()
         await fetchPushConfigs()
         await fetchPushLogs()
-        // Check if tables exist after saving
         await handleVerifySupabaseTables()
       } else {
         const data = await res.json().catch(() => ({}))
@@ -767,9 +652,10 @@ export default function Home() {
   const handleTestSupabase = async () => {
     setSbTesting(true)
     try {
-      const res = await fetch('/api/settings/supabase/test', {
-        method: 'POST',
+      const res = await fetch('/api/settings/supabase', {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'test' }),
       })
       if (res.ok) {
         const data = await res.json()
@@ -798,6 +684,7 @@ export default function Home() {
           toast.success('Supabase tables verified!')
           setSbSetupSql(null)
           setSbTablesExist(true)
+          setDbStatus('supabase')
           setSbSqlEditorLink(data.sqlEditorLink || null)
         } else if (data.ok && data.sql) {
           setSbSetupSql(data.sql)
@@ -821,9 +708,10 @@ export default function Home() {
   const handleVerifySupabaseTables = async () => {
     setSbVerifying(true)
     try {
-      const res = await fetch('/api/settings/supabase/test', {
-        method: 'POST',
+      const res = await fetch('/api/settings/supabase', {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'test' }),
       })
       if (res.ok) {
         const data = await res.json()
@@ -832,14 +720,13 @@ export default function Home() {
           setDbStatus('supabase')
           setSbSetupSql(null)
           toast.success('Database tables verified! Supabase is ready.')
-          // Refresh all data from Supabase
           await fetchNotifications()
           await fetchFilterRules()
           await fetchPushConfigs()
           await fetchPushLogs()
         } else if (data.ok && !data.tablesExist) {
           setSbTablesExist(false)
-          setDbStatus('local')
+          setDbStatus('unknown')
           toast.info('Tables not found yet. Run the setup SQL first.')
         } else {
           setSbTablesExist(null)
@@ -857,7 +744,6 @@ export default function Home() {
   }
 
   const handleCopySetupSql = async () => {
-    // Fetch the SQL if we don't have it yet
     if (!sbSetupSql) {
       try {
         const res = await fetch('/api/settings/supabase/setup', {
@@ -871,6 +757,7 @@ export default function Home() {
             if (data.sqlEditorLink) setSbSqlEditorLink(data.sqlEditorLink)
             if (data.tablesExist) {
               setSbTablesExist(true)
+              setDbStatus('supabase')
               toast.info('Tables already exist!')
               return
             }
@@ -892,29 +779,6 @@ export default function Home() {
     }
   }
 
-  const handleToggleSupabase = async (checked: boolean) => {
-    if (!supabaseConfig) return
-    try {
-      const res = await fetch('/api/settings/supabase', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: supabaseConfig.url,
-          anonKey: supabaseConfig.anonKey,
-          isActive: checked,
-        }),
-      })
-      if (res.ok) {
-        setSupabaseConfig((prev) => prev ? { ...prev, isActive: checked } : null)
-        toast.success(checked ? 'Supabase integration enabled' : 'Supabase integration disabled')
-      } else {
-        toast.error('Failed to update Supabase config')
-      }
-    } catch {
-      toast.error('Failed to connect to server')
-    }
-  }
-
   const handleDeleteSupabase = async () => {
     if (!supabaseConfig) return
     try {
@@ -922,19 +786,20 @@ export default function Home() {
         method: 'DELETE',
       })
       if (res.ok) {
-        toast.success('Supabase config deleted — using local database')
+        toast.success('Supabase disconnected')
         setSupabaseConfig(null)
         setSbUrl('')
-        setSbAnonKey('sb_publishable_u02JQcPqBnXCOGek5Hgm7g_8gI9fpMT')
-        setDbStatus('local')
+        setSbAnonKey('')
+        setDbStatus('unknown')
         setSbSetupSql(null)
         setSbTablesExist(null)
         setSbSqlEditorLink(null)
         await fetchNotifications()
         await fetchFilterRules()
         await fetchPushConfigs()
+        await fetchPushLogs()
       } else {
-        toast.error('Failed to delete Supabase config')
+        toast.error('Failed to disconnect Supabase')
       }
     } catch {
       toast.error('Failed to connect to server')
@@ -946,12 +811,10 @@ export default function Home() {
   const unreadCount = notifications.filter((n) => !n.isRead).length
 
   const filteredNotifications = notifications.filter((n) => {
-    // Filter by category
     if (notifFilter === 'unread' && n.isRead) return false
     if (notifFilter === 'filtered' && !n.isFiltered) return false
     if (notifFilter === 'pushed' && !n.isPushed) return false
 
-    // Filter by search query
     if (searchQuery) {
       const q = searchQuery.toLowerCase()
       return (
@@ -964,7 +827,6 @@ export default function Home() {
     return true
   })
 
-  // Compute match counts for filter rules
   const getMatchCount = useCallback(
     (rulePrefix: string) => {
       return notifications.filter(
@@ -1025,10 +887,10 @@ export default function Home() {
               </span>
             </div>
             {/* Database Status */}
-            <div className="flex items-center gap-1 ml-1" title={dbStatus === 'supabase' ? 'Using Supabase PostgreSQL' : dbStatus === 'local' ? 'Using local SQLite' : 'Checking database...'}>
+            <div className="flex items-center gap-1 ml-1" title={dbStatus === 'supabase' ? 'Using Supabase PostgreSQL' : 'Database not configured'}>
               <Database className={`size-3 ${dbStatus === 'supabase' ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`} />
               <span className={`text-[10px] font-medium ${dbStatus === 'supabase' ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}>
-                {dbStatus === 'supabase' ? 'Supabase' : dbStatus === 'local' ? 'Local DB' : '...'}
+                {dbStatus === 'supabase' ? 'Supabase' : 'Not Configured'}
               </span>
             </div>
           </div>
@@ -1205,7 +1067,7 @@ export default function Home() {
                       actionLoading === 'push' ? 'animate-pulse' : ''
                     }`}
                   />
-                  Retry Failed
+                  Push All
                 </Button>
                 {unreadCount > 0 && (
                   <Button
@@ -1338,15 +1200,15 @@ export default function Home() {
           {/* ── Tab 2: Settings ──────────────────────────────────────────── */}
           <TabsContent value="settings" className="flex-1 mt-0 px-4 pb-6">
             <div className="flex flex-col gap-6 py-4">
-              {/* Filter Rules Section */}
+
+              {/* ── Filter Rules Section ─────────────────────────────────── */}
               <section>
                 <div className="flex items-center gap-2 mb-4">
                   <Filter className="size-5 text-emerald-600" />
                   <h2 className="text-lg font-semibold">Filter Rules</h2>
                 </div>
                 <p className="text-sm text-muted-foreground mb-4">
-                  Define keywords or prefixes to automatically filter notifications
-                  and push matching messages to your configured URL in real-time.
+                  Define keywords or prefixes to automatically filter notifications.
                   Use &quot;Contains&quot; to match anywhere in the message, or
                   &quot;Starts With&quot; for prefix-only matching.
                 </p>
@@ -1416,8 +1278,7 @@ export default function Home() {
                     <AlertCircle className="size-4" />
                     <AlertTitle>No filter rules</AlertTitle>
                     <AlertDescription>
-                      Add a prefix above to start filtering notifications
-                      automatically.
+                      Add a prefix above to start filtering notifications automatically.
                     </AlertDescription>
                   </Alert>
                 ) : (
@@ -1450,8 +1311,7 @@ export default function Home() {
                                   </Badge>
                                   {matchCount > 0 && (
                                     <span className="text-xs text-muted-foreground">
-                                      {matchCount} match
-                                      {matchCount !== 1 ? 'es' : ''}
+                                      {matchCount} match{matchCount !== 1 ? 'es' : ''}
                                     </span>
                                   )}
                                 </div>
@@ -1475,116 +1335,273 @@ export default function Home() {
 
               <Separator />
 
-              {/* Airtable Integration Section */}
+              {/* ── Push Configuration Section ───────────────────────────── */}
               <section>
                 <div className="flex items-center gap-2 mb-4">
-                  <Database className="size-5 text-emerald-600" />
-                  <h2 className="text-lg font-semibold">Airtable Integration</h2>
-                  {airtableConfig?.isActive && (
+                  <Globe className="size-5 text-emerald-600" />
+                  <h2 className="text-lg font-semibold">Push Configuration</h2>
+                </div>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Configure webhook URLs to push filtered notifications to external services.
+                  Each filtered notification will be sent as a JSON payload to all active endpoints.
+                </p>
+
+                {/* Add New Push Config */}
+                <Card className="py-0 gap-0 mb-4">
+                  <CardContent className="p-4 space-y-3">
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="https://example.com/webhook"
+                        value={newConfigUrl}
+                        onChange={(e) => setNewConfigUrl(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleAddPushConfig()
+                        }}
+                        className="flex-1"
+                      />
+                      <Select
+                        value={newConfigMethod}
+                        onValueChange={(v) =>
+                          setNewConfigMethod(v as 'POST' | 'GET')
+                        }
+                      >
+                        <SelectTrigger className="w-24 shrink-0">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="POST">POST</SelectItem>
+                          <SelectItem value="GET">GET</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                        Headers (JSON)
+                      </label>
+                      <Textarea
+                        placeholder='{"Content-Type": "application/json", "Authorization": "Bearer ..."}'
+                        value={newConfigHeaders}
+                        onChange={(e) => setNewConfigHeaders(e.target.value)}
+                        className="h-20 text-xs font-mono resize-none"
+                      />
+                    </div>
+                    <div className="flex justify-end">
+                      <Button
+                        onClick={handleAddPushConfig}
+                        disabled={actionLoading === 'addConfig'}
+                        className="bg-emerald-600 hover:bg-emerald-700 gap-1.5"
+                      >
+                        <Plus className="size-4" />
+                        Add Config
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Push Configs List */}
+                {loading ? (
+                  <div className="space-y-3">
+                    {[1, 2].map((i) => (
+                      <Card key={i} className="py-0 gap-0">
+                        <CardContent className="p-4">
+                          <div className="flex items-center justify-between">
+                            <Skeleton className="h-5 w-48" />
+                            <Skeleton className="h-5 w-12" />
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                ) : pushConfigs.length === 0 ? (
+                  <Alert>
+                    <AlertCircle className="size-4" />
+                    <AlertTitle>No push configurations</AlertTitle>
+                    <AlertDescription>
+                      Add a webhook URL above to start pushing filtered notifications.
+                    </AlertDescription>
+                  </Alert>
+                ) : (
+                  <div className="space-y-2">
+                    {pushConfigs.map((config) => (
+                      <Card key={config.id} className="py-0 gap-0">
+                        <CardContent className="p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <Switch
+                                checked={config.isActive}
+                                onCheckedChange={(checked) =>
+                                  handleTogglePushConfig(config.id, checked)
+                                }
+                                className="data-[state=checked]:bg-emerald-600"
+                              />
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <code className="text-sm font-mono font-medium bg-muted px-1.5 py-0.5 rounded truncate max-w-[200px] sm:max-w-[300px] block">
+                                    {config.url}
+                                  </code>
+                                  <Badge
+                                    variant="outline"
+                                    className="text-[10px] h-5 px-1.5 shrink-0"
+                                  >
+                                    {config.method}
+                                  </Badge>
+                                </div>
+                                {config.headers && config.headers !== '{}' && (
+                                  <p className="text-xs text-muted-foreground mt-1 truncate max-w-[250px] sm:max-w-[350px]">
+                                    Headers: {config.headers}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-8 text-muted-foreground hover:text-destructive shrink-0"
+                              onClick={() => handleDeletePushConfig(config.id)}
+                            >
+                              <Trash2 className="size-4" />
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <Separator />
+
+              {/* ── Supabase Database Section ─────────────────────────────── */}
+              <section>
+                <div className="flex items-center gap-2 mb-4">
+                  <Server className="size-5 text-emerald-600" />
+                  <h2 className="text-lg font-semibold">Database (Supabase)</h2>
+                  {dbStatus === 'supabase' && sbTablesExist === true && (
                     <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-xs gap-1">
                       <Zap className="size-3" />
                       Connected
                     </Badge>
                   )}
+                  {supabaseConfig && sbTablesExist === false && (
+                    <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-0 text-xs gap-1">
+                      <AlertCircle className="size-3" />
+                      Setup Required
+                    </Badge>
+                  )}
+                  {dbStatus === 'unknown' && !supabaseConfig && (
+                    <Badge variant="outline" className="text-xs gap-1">
+                      <Database className="size-3" />
+                      Not Configured
+                    </Badge>
+                  )}
                 </div>
                 <p className="text-sm text-muted-foreground mb-4">
-                  Push filtered notifications to your Airtable base automatically. Each filtered notification creates a new record with app name, title, message, and prefix.
+                  Connect to Supabase PostgreSQL as your primary database. All notifications,
+                  filter rules, push configs, and logs are stored in Supabase.
                 </p>
 
-                {/* Airtable Config Form */}
+                {/* Supabase Config Form */}
                 <Card className="py-0 gap-0 mb-4">
                   <CardContent className="p-4 space-y-3">
                     <div className="grid gap-3">
-                      <div className="grid grid-cols-[1fr_1fr] gap-2">
-                        <div>
-                          <label className="text-xs font-medium text-muted-foreground mb-1 block">Base ID</label>
-                          <Input
-                            placeholder="appXXXXXXXXXXXXXXX"
-                            value={atBaseId}
-                            onChange={(e) => setAtBaseId(e.target.value)}
-                            className="h-9 text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium text-muted-foreground mb-1 block">Table Name</label>
-                          <Input
-                            placeholder="Notifications"
-                            value={atTableName}
-                            onChange={(e) => setAtTableName(e.target.value)}
-                            className="h-9 text-sm"
-                          />
-                        </div>
-                      </div>
                       <div>
-                        <label className="text-xs font-medium text-muted-foreground mb-1 block">Personal Access Token</label>
+                        <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                          Supabase URL
+                        </label>
                         <Input
-                          type="password"
-                          placeholder="pat..."
-                          value={atToken}
-                          onChange={(e) => setAtToken(e.target.value)}
+                          placeholder="https://your-project.supabase.co"
+                          value={sbUrl}
+                          onChange={(e) => setSbUrl(e.target.value)}
                           className="h-9 text-sm"
                         />
+                        {supabaseConfig && (
+                          <p className="text-[11px] text-muted-foreground mt-1">
+                            Current: {supabaseConfig.url}
+                          </p>
+                        )}
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                          Anon Key
+                        </label>
+                        <Input
+                          type="password"
+                          placeholder="eyJhbGciOiJIUzI1NiIs..."
+                          value={sbAnonKey}
+                          onChange={(e) => setSbAnonKey(e.target.value)}
+                          className="h-9 text-sm"
+                        />
+                        {supabaseConfig && !sbAnonKey && (
+                          <p className="text-[11px] text-muted-foreground mt-1">
+                            Current key: {maskKey(supabaseConfig.anonKey)}
+                          </p>
+                        )}
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs text-muted-foreground">
-                        {airtableConfig
-                          ? `Connected to ${airtableConfig.baseId} → ${airtableConfig.tableName}`
-                          : 'Enter your Airtable credentials to connect'}
-                      </p>
-                      <div className="flex gap-2">
-                        {airtableConfig && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={handleTestAirtable}
-                            disabled={atTesting}
-                            className="gap-1.5"
-                          >
-                            <RefreshCw className={`size-3.5 ${atTesting ? 'animate-spin' : ''}`} />
-                            Test
-                          </Button>
-                        )}
+                    <div className="flex flex-wrap gap-2 justify-end">
+                      {supabaseConfig && (
                         <Button
-                          onClick={handleSaveAirtable}
-                          disabled={atSaving}
-                          className="bg-emerald-600 hover:bg-emerald-700 gap-1.5"
+                          variant="outline"
                           size="sm"
+                          onClick={handleTestSupabase}
+                          disabled={sbTesting}
+                          className="gap-1.5"
                         >
-                          <Plus className="size-4" />
-                          {airtableConfig ? 'Update' : 'Connect'}
+                          <RefreshCw className={`size-3.5 ${sbTesting ? 'animate-spin' : ''}`} />
+                          Test
                         </Button>
-                      </div>
+                      )}
+                      {supabaseConfig && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleSetupSupabase}
+                          disabled={sbSetup}
+                          className="gap-1.5"
+                        >
+                          <Database className={`size-3.5 ${sbSetup ? 'animate-pulse' : ''}`} />
+                          Setup
+                        </Button>
+                      )}
+                      {supabaseConfig && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleVerifySupabaseTables}
+                          disabled={sbVerifying}
+                          className="gap-1.5"
+                        >
+                          <Check className={`size-3.5 ${sbVerifying ? 'animate-pulse' : ''}`} />
+                          Verify
+                        </Button>
+                      )}
+                      <Button
+                        onClick={handleSaveSupabase}
+                        disabled={sbSaving}
+                        className="bg-emerald-600 hover:bg-emerald-700 gap-1.5"
+                        size="sm"
+                      >
+                        <Plus className="size-4" />
+                        {supabaseConfig ? 'Update' : 'Connect'}
+                      </Button>
                     </div>
                   </CardContent>
                 </Card>
 
-                {/* Connection Status Card */}
-                {airtableConfig && (
-                  <Card className="py-0 gap-0">
+                {/* Connected Status Card */}
+                {supabaseConfig && (
+                  <Card className="py-0 gap-0 mb-4">
                     <CardContent className="p-4">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-3 min-w-0">
-                          <Switch
-                            checked={airtableConfig.isActive}
-                            onCheckedChange={(checked) => handleToggleAirtable(checked)}
-                            className="data-[state=checked]:bg-emerald-600"
-                          />
+                          <div className={`size-3 rounded-full shrink-0 ${dbStatus === 'supabase' && sbTablesExist === true ? 'bg-emerald-500' : sbTablesExist === false ? 'bg-amber-500' : 'bg-muted-foreground'}`} />
                           <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <code className="text-sm font-mono font-medium bg-muted px-1.5 py-0.5 rounded">
-                                {airtableConfig.baseId}
-                              </code>
-                              <span className="text-muted-foreground text-sm">→</span>
-                              <code className="text-sm font-mono bg-muted px-1.5 py-0.5 rounded">
-                                {airtableConfig.tableName}
-                              </code>
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-1">
-                              <a href={airtableConfig.baseUrl} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">
-                                Open in Airtable ↗
-                              </a>
+                            <p className="text-sm font-medium">
+                              Supabase {dbStatus === 'supabase' && sbTablesExist === true ? '(Connected)' : sbTablesExist === false ? '(Setup Required)' : '(Checking...)'}
+                            </p>
+                            <p className="text-xs text-muted-foreground truncate max-w-[250px] sm:max-w-[350px]">
+                              {supabaseConfig.url}
                             </p>
                           </div>
                         </div>
@@ -1592,7 +1609,7 @@ export default function Home() {
                           variant="ghost"
                           size="icon"
                           className="size-8 text-muted-foreground hover:text-destructive shrink-0"
-                          onClick={handleDeleteAirtable}
+                          onClick={handleDeleteSupabase}
                         >
                           <Trash2 className="size-4" />
                         </Button>
@@ -1600,45 +1617,19 @@ export default function Home() {
                     </CardContent>
                   </Card>
                 )}
-              </section>
-
-              <Separator />
-
-              {/* Supabase Database Section */}
-              <section>
-                <div className="flex items-center gap-2 mb-4">
-                  <Server className="size-5 text-emerald-600" />
-                  <h2 className="text-lg font-semibold">Supabase Database</h2>
-                  {dbStatus === 'supabase' && sbTablesExist !== false && (
-                    <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-xs gap-1">
-                      <Zap className="size-3" />
-                      Active
-                    </Badge>
-                  )}
-                  {dbStatus === 'supabase' && sbTablesExist === false && (
-                    <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-0 text-xs gap-1">
-                      <AlertCircle className="size-3" />
-                      Setup Required
-                    </Badge>
-                  )}
-                  {dbStatus === 'local' && (
-                    <Badge variant="outline" className="text-xs gap-1">
-                      <Database className="size-3" />
-                      Local SQLite
-                    </Badge>
-                  )}
-                </div>
-                <p className="text-sm text-muted-foreground mb-4">
-                  Use Supabase PostgreSQL as your primary database. All notifications, filter rules, push configs, and logs are stored in Supabase. When not connected, local SQLite is used as fallback.
-                </p>
 
                 {/* Database Setup Required Banner */}
                 {supabaseConfig && sbTablesExist === false && (
                   <Alert className="mb-4 border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30">
                     <AlertCircle className="size-4 text-amber-600" />
-                    <AlertTitle className="text-amber-800 dark:text-amber-300 text-sm font-semibold">Database Setup Required</AlertTitle>
-                    <AlertDescription className="text-amber-700 dark:text-amber-400 text-xs space-y-2">
-                      <p>Your Supabase project is connected but the required tables don&apos;t exist yet. You need to run the setup SQL in the Supabase SQL Editor to create them.</p>
+                    <AlertTitle className="text-amber-800 dark:text-amber-300 text-sm font-semibold">
+                      Database Setup Required
+                    </AlertTitle>
+                    <AlertDescription className="text-amber-700 dark:text-amber-400 text-xs space-y-3">
+                      <p>
+                        Your Supabase project is connected but the required tables don&apos;t exist yet.
+                        You need to run the setup SQL in the Supabase SQL Editor to create them.
+                      </p>
                       <div className="flex flex-wrap gap-2">
                         <Button
                           variant="outline"
@@ -1660,418 +1651,75 @@ export default function Home() {
                               size="sm"
                               className="gap-1.5 border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 h-8"
                             >
-                              <ArrowUpRight className="size-3.5" />
+                              <ExternalLink className="size-3.5" />
                               Open SQL Editor
                             </Button>
                           </a>
                         )}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleVerifySupabaseTables}
-                          disabled={sbVerifying}
-                          className="gap-1.5 border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 h-8"
-                        >
-                          <Check className={`size-3.5 ${sbVerifying ? 'animate-pulse' : ''}`} />
-                          Verify Tables
-                        </Button>
                       </div>
-                    </AlertDescription>
-                  </Alert>
-                )}
 
-                {/* Tables Verified Banner */}
-                {supabaseConfig && sbTablesExist === true && (
-                  <Alert className="mb-4 border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30">
-                    <Check className="size-4 text-emerald-600" />
-                    <AlertTitle className="text-emerald-800 dark:text-emerald-300 text-sm font-semibold">Database Ready</AlertTitle>
-                    <AlertDescription className="text-emerald-700 dark:text-emerald-400 text-xs">
-                      All required tables exist in Supabase. Your data is being stored in PostgreSQL.
-                    </AlertDescription>
-                  </Alert>
-                )}
-
-                {/* Supabase Config Form */}
-                <Card className="py-0 gap-0 mb-4">
-                  <CardContent className="p-4 space-y-3">
-                    <div className="grid gap-3">
-                      <div>
-                        <label className="text-xs font-medium text-muted-foreground mb-1 block">Project URL</label>
-                        <Input
-                          placeholder="https://your-project.supabase.co"
-                          value={sbUrl}
-                          onChange={(e) => setSbUrl(e.target.value)}
-                          className="h-9 text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs font-medium text-muted-foreground mb-1 block">Publishable / Anon Key</label>
-                        <Input
-                          type="password"
-                          placeholder="sb_publishable_... or eyJ..."
-                          value={sbAnonKey}
-                          onChange={(e) => setSbAnonKey(e.target.value)}
-                          className="h-9 text-sm"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between flex-wrap gap-2">
-                      <p className="text-xs text-muted-foreground">
-                        {supabaseConfig
-                          ? `Connected to ${supabaseConfig.url}`
-                          : 'Enter your Supabase credentials to connect'}
-                      </p>
-                      <div className="flex gap-2 flex-wrap">
-                        {supabaseConfig && (
-                          <>
+                      {/* Expandable SQL Display */}
+                      {sbSetupSql && (
+                        <Collapsible open={sbSqlExpanded} onOpenChange={setSbSqlExpanded}>
+                          <CollapsibleTrigger asChild>
                             <Button
-                              variant="outline"
+                              variant="ghost"
                               size="sm"
-                              onClick={handleCopySetupSql}
-                              className="gap-1.5"
+                              className="gap-1 text-amber-700 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/50 h-7 px-2 text-xs"
                             >
-                              <Copy className="size-3.5" />
-                              Copy Setup SQL
+                              {sbSqlExpanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+                              {sbSqlExpanded ? 'Hide SQL' : 'Show SQL'}
                             </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={handleVerifySupabaseTables}
-                              disabled={sbVerifying}
-                              className="gap-1.5"
-                            >
-                              <Database className={`size-3.5 ${sbVerifying ? 'animate-pulse' : ''}`} />
-                              Verify
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={handleTestSupabase}
-                              disabled={sbTesting}
-                              className="gap-1.5"
-                            >
-                              <RefreshCw className={`size-3.5 ${sbTesting ? 'animate-spin' : ''}`} />
-                              Test
-                            </Button>
-                          </>
-                        )}
-                        <Button
-                          onClick={handleSaveSupabase}
-                          disabled={sbSaving}
-                          className="bg-emerald-600 hover:bg-emerald-700 gap-1.5"
-                          size="sm"
-                        >
-                          <Plus className="size-4" />
-                          {supabaseConfig ? 'Update' : 'Connect'}
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Setup SQL Display - Collapsible */}
-                {sbSetupSql && (
-                  <Card className="py-0 gap-0 mb-4 border-amber-200 dark:border-amber-800">
-                    <CardContent className="p-4 space-y-3">
-                      <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
-                        <AlertCircle className="size-4" />
-                        <h3 className="text-sm font-semibold">Setup SQL</h3>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        Run the SQL below in your Supabase SQL Editor to create the required tables. After running, click &quot;Verify&quot; to confirm.
-                      </p>
-                      {sbSqlEditorLink && (
-                        <a
-                          href={sbSqlEditorLink}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300 hover:underline"
-                        >
-                          <ArrowUpRight className="size-3.5" />
-                          Open Supabase SQL Editor
-                        </a>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <pre className="bg-amber-100 dark:bg-amber-950/50 rounded-lg p-3 text-xs font-mono overflow-x-auto max-h-64 overflow-y-auto mt-2 border border-amber-200 dark:border-amber-800">
+                              {sbSetupSql}
+                            </pre>
+                          </CollapsibleContent>
+                        </Collapsible>
                       )}
-                      <Collapsible open={sbSqlExpanded} onOpenChange={setSbSqlExpanded}>
-                        <CollapsibleTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="w-full gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-                          >
-                            {sbSqlExpanded ? (
-                              <>
-                                <ChevronUp className="size-3.5" />
-                                Hide SQL
-                              </>
-                            ) : (
-                              <>
-                                <ChevronDown className="size-3.5" />
-                                Show SQL
-                              </>
-                            )}
-                          </Button>
-                        </CollapsibleTrigger>
-                        <CollapsibleContent>
-                          <div className="relative mt-2">
-                            <ScrollArea className="max-h-64">
-                              <pre className="text-[11px] leading-relaxed bg-muted p-3 rounded-md overflow-x-auto whitespace-pre-wrap font-mono">
-                                {sbSetupSql}
-                              </pre>
-                            </ScrollArea>
-                          </div>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="mt-2 gap-1.5"
-                            onClick={() => {
-                              navigator.clipboard.writeText(sbSetupSql)
-                              toast.success('SQL copied to clipboard!')
-                            }}
-                          >
-                            <Copy className="size-3.5" />
-                            Copy SQL
-                          </Button>
-                        </CollapsibleContent>
-                      </Collapsible>
-                    </CardContent>
-                  </Card>
-                )}
-
-                {/* Connection Status Card */}
-                {supabaseConfig && (
-                  <Card className="py-0 gap-0">
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <Switch
-                            checked={supabaseConfig.isActive}
-                            onCheckedChange={(checked) => handleToggleSupabase(checked)}
-                            className="data-[state=checked]:bg-emerald-600"
-                          />
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <code className="text-sm font-mono font-medium bg-muted px-1.5 py-0.5 rounded">
-                                {supabaseConfig.url.replace('https://', '').replace('.supabase.co', '')}
-                              </code>
-                              <span className="text-muted-foreground text-sm">→</span>
-                              <code className="text-sm font-mono bg-muted px-1.5 py-0.5 rounded">
-                                PostgreSQL
-                              </code>
-                              {sbTablesExist === true && (
-                                <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-[10px] px-1.5 gap-0.5">
-                                  <Check className="size-2.5" />
-                                  Ready
-                                </Badge>
-                              )}
-                              {sbTablesExist === false && (
-                                <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-0 text-[10px] px-1.5 gap-0.5">
-                                  <AlertCircle className="size-2.5" />
-                                  No Tables
-                                </Badge>
-                              )}
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-1">
-                              <a href={supabaseConfig.url} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">
-                                Open in Supabase ↗
-                              </a>
-                              {sbSqlEditorLink && (
-                                <>
-                                  {' · '}
-                                  <a href={sbSqlEditorLink} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">
-                                    SQL Editor ↗
-                                  </a>
-                                </>
-                              )}
-                            </p>
-                          </div>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-muted-foreground hover:text-destructive shrink-0"
-                          onClick={handleDeleteSupabase}
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                )}
-              </section>
-
-              <Separator />
-
-              {/* Push Configuration Section */}
-              <section>
-                <div className="flex items-center gap-2 mb-4">
-                  <Globe className="size-5 text-emerald-600" />
-                  <h2 className="text-lg font-semibold">Push Configuration</h2>
-                  {pushConfigs.some((c) => c.isActive) && (
-                    <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-xs gap-1">
-                      <Zap className="size-3" />
-                      Auto-Push
-                    </Badge>
-                  )}
-                </div>
-                <p className="text-sm text-muted-foreground mb-4">
-                  Filtered notifications are pushed here automatically in
-                  real-time. You can also manually push remaining ones.
-                </p>
-
-                {/* Add New Config */}
-                <Card className="py-0 gap-0 mb-4">
-                  <CardContent className="p-4 space-y-3">
-                    <div className="flex gap-2">
-                      <Input
-                        placeholder="https://example.com/webhook"
-                        value={newConfigUrl}
-                        onChange={(e) => setNewConfigUrl(e.target.value)}
-                        className="flex-1"
-                      />
-                      <Select
-                        value={newConfigMethod}
-                        onValueChange={(v) =>
-                          setNewConfigMethod(v as 'POST' | 'GET')
-                        }
-                      >
-                        <SelectTrigger className="w-24 shrink-0">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="POST">POST</SelectItem>
-                          <SelectItem value="GET">GET</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <Textarea
-                      placeholder='Custom headers (JSON, e.g. {"Authorization": "Bearer xxx"})'
-                      value={newConfigHeaders}
-                      onChange={(e) => setNewConfigHeaders(e.target.value)}
-                      className="min-h-16 text-xs font-mono"
-                    />
-                    <Button
-                      onClick={handleAddPushConfig}
-                      disabled={actionLoading === 'addConfig'}
-                      className="w-full bg-emerald-600 hover:bg-emerald-700 gap-1.5"
-                    >
-                      <Plus className="size-4" />
-                      Add Push Config
-                    </Button>
-                  </CardContent>
-                </Card>
-
-                {/* Configs List */}
-                {loading ? (
-                  <div className="space-y-3">
-                    {[1].map((i) => (
-                      <Card key={i} className="py-0 gap-0">
-                        <CardContent className="p-4">
-                          <Skeleton className="h-5 w-48 mb-2" />
-                          <Skeleton className="h-4 w-24" />
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                ) : pushConfigs.length === 0 ? (
-                  <Alert>
-                    <AlertCircle className="size-4" />
-                    <AlertTitle>No push configurations</AlertTitle>
-                    <AlertDescription>
-                      Add a URL above to start pushing filtered notifications to
-                      external services.
                     </AlertDescription>
                   </Alert>
-                ) : (
-                  <div className="space-y-2">
-                    {pushConfigs.map((config) => {
-                      let displayHeaders = ''
-                      try {
-                        const parsed = JSON.parse(config.headers)
-                        if (Object.keys(parsed).length > 0) {
-                          displayHeaders = JSON.stringify(parsed)
-                        }
-                      } catch {
-                        displayHeaders = config.headers
-                      }
-                      return (
-                        <Card key={config.id} className="py-0 gap-0">
-                          <CardContent className="p-4">
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="flex items-center gap-3 min-w-0">
-                                <Switch
-                                  checked={config.isActive}
-                                  onCheckedChange={(checked) =>
-                                    handleTogglePushConfig(config.id, checked)
-                                  }
-                                  className="data-[state=checked]:bg-emerald-600"
-                                />
-                                <div className="min-w-0">
-                                  <div className="flex items-center gap-2">
-                                    <Badge
-                                      variant="outline"
-                                      className="text-xs font-mono"
-                                    >
-                                      {config.method}
-                                    </Badge>
-                                    <p className="text-sm font-medium truncate">
-                                      {config.url}
-                                    </p>
-                                  </div>
-                                  {displayHeaders && (
-                                    <p className="text-xs text-muted-foreground mt-1 truncate">
-                                      Headers: {displayHeaders}
-                                    </p>
-                                  )}
-                                </div>
-                              </div>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="size-8 text-muted-foreground hover:text-destructive shrink-0"
-                                onClick={() =>
-                                  handleDeletePushConfig(config.id)
-                                }
-                              >
-                                <Trash2 className="size-4" />
-                              </Button>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      )
-                    })}
-                  </div>
+                )}
+
+                {/* Not Connected Help */}
+                {!supabaseConfig && (
+                  <Alert>
+                    <Database className="size-4" />
+                    <AlertTitle>No database configured</AlertTitle>
+                    <AlertDescription className="text-xs space-y-2">
+                      <p>
+                        Enter your Supabase URL and Anon Key above to connect. You can find these in
+                        your Supabase project dashboard under Settings → API.
+                      </p>
+                    </AlertDescription>
+                  </Alert>
                 )}
               </section>
             </div>
           </TabsContent>
 
-          {/* ── Tab 3: Push Logs ─────────────────────────────────────────── */}
+          {/* ── Tab 3: Logs ──────────────────────────────────────────────── */}
           <TabsContent value="logs" className="flex-1 mt-0 px-4 pb-6">
             <div className="py-4">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                  <History className="size-5 text-emerald-600" />
-                  <h2 className="text-lg font-semibold">Push Logs</h2>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={fetchPushLogs}
-                  className="gap-1.5"
-                >
-                  <RefreshCw className="size-3.5" />
-                  Refresh
-                </Button>
+              <div className="flex items-center gap-2 mb-4">
+                <History className="size-5 text-emerald-600" />
+                <h2 className="text-lg font-semibold">Push Logs</h2>
               </div>
+              <p className="text-sm text-muted-foreground mb-4">
+                History of notification push attempts to your configured webhook endpoints.
+              </p>
 
               {loading ? (
                 <div className="space-y-3">
                   {[1, 2, 3].map((i) => (
                     <Card key={i} className="py-0 gap-0">
                       <CardContent className="p-4 space-y-2">
-                        <Skeleton className="h-4 w-48" />
-                        <Skeleton className="h-3 w-32" />
+                        <div className="flex items-center justify-between">
+                          <Skeleton className="h-5 w-32" />
+                          <Skeleton className="h-5 w-16" />
+                        </div>
+                        <Skeleton className="h-3 w-48" />
                       </CardContent>
                     </Card>
                   ))}
@@ -2081,199 +1729,225 @@ export default function Home() {
                   <div className="size-16 rounded-full bg-muted flex items-center justify-center mb-4">
                     <History className="size-7 text-muted-foreground" />
                   </div>
-                  <h3 className="font-semibold text-lg mb-1">No push logs</h3>
+                  <h3 className="font-semibold text-lg mb-1">No push logs yet</h3>
                   <p className="text-muted-foreground text-sm max-w-xs">
-                    Push logs will appear here once you push filtered
-                    notifications to a configured endpoint.
+                    Push logs will appear here after filtered notifications are pushed to your webhook endpoints.
                   </p>
                 </div>
               ) : (
-                <ScrollArea className="max-h-[calc(100vh-220px)]">
-                  <div className="flex flex-col gap-2 pr-1">
-                    {pushLogs.map((log) => {
-                      const isExpanded = expandedLogId === log.id
-                      const isSuccess = log.status === 'success'
-                      return (
-                        <Card
-                          key={log.id}
-                          className={`py-0 gap-0 transition-all ${
-                            isSuccess
-                              ? 'border-l-4 border-l-emerald-500'
-                              : 'border-l-4 border-l-red-500'
-                          }`}
-                        >
-                          <CardContent
-                            className="p-4 cursor-pointer"
-                            onClick={() =>
-                              setExpandedLogId(isExpanded ? null : log.id)
-                            }
-                          >
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-2 mb-1 flex-wrap">
-                                  {isSuccess ? (
-                                    <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-xs gap-1">
-                                      <Check className="size-3" />
+                <div className="space-y-2">
+                  {pushLogs.map((log) => (
+                    <Collapsible
+                      key={log.id}
+                      open={expandedLogId === log.id}
+                      onOpenChange={(open) =>
+                        setExpandedLogId(open ? log.id : null)
+                      }
+                    >
+                      <Card className="py-0 gap-0">
+                        <CollapsibleTrigger asChild>
+                          <CardContent className="p-4 cursor-pointer hover:bg-muted/50 transition-colors">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className="text-sm font-medium truncate max-w-[150px] sm:max-w-[250px]">
+                                    {log.notification?.title ?? 'Unknown'}
+                                  </span>
+                                  {log.status === 'success' ? (
+                                    <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-xs shrink-0">
+                                      <Check className="size-3 mr-0.5" />
                                       Success
                                     </Badge>
-                                  ) : (
-                                    <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-0 text-xs gap-1">
-                                      <X className="size-3" />
+                                  ) : log.status === 'failed' ? (
+                                    <Badge variant="destructive" className="text-xs shrink-0">
+                                      <X className="size-3 mr-0.5" />
                                       Failed
                                     </Badge>
-                                  )}
-                                  {log.responseStatus && (
-                                    <Badge
-                                      variant="outline"
-                                      className="text-xs font-mono"
-                                    >
-                                      {log.responseStatus}
+                                  ) : (
+                                    <Badge variant="outline" className="text-xs shrink-0">
+                                      {log.status}
                                     </Badge>
                                   )}
                                 </div>
-                                <p className="text-sm font-medium truncate">
-                                  {log.notification?.title || 'Unknown'}
-                                </p>
-                                <p className="text-xs text-muted-foreground truncate mt-0.5">
-                                  → {log.notification?.appName || 'Unknown'}
-                                </p>
                               </div>
-                              <div className="flex flex-col items-end shrink-0 gap-1">
-                                <p className="text-[11px] text-muted-foreground whitespace-nowrap">
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="text-[11px] text-muted-foreground hidden sm:block">
                                   {formatRelativeTime(log.pushedAt)}
-                                </p>
-                                {isExpanded ? (
+                                </span>
+                                {expandedLogId === log.id ? (
                                   <ChevronUp className="size-4 text-muted-foreground" />
                                 ) : (
                                   <ChevronDown className="size-4 text-muted-foreground" />
                                 )}
                               </div>
                             </div>
+                            <div className="flex items-center gap-2 mt-1.5">
+                              <Globe className="size-3 text-muted-foreground shrink-0" />
+                              <span className="text-xs text-muted-foreground truncate max-w-[200px] sm:max-w-[350px]">
+                                {log.notification?.appName ?? 'Unknown App'}
+                              </span>
+                              <span className="text-[11px] text-muted-foreground shrink-0 sm:hidden">
+                                {formatRelativeTime(log.pushedAt)}
+                              </span>
+                            </div>
+                          </CardContent>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <div className="px-4 pb-4 space-y-3 border-t">
+                            <div className="pt-3 space-y-3">
+                              {/* Push URL */}
+                              <div>
+                                <p className="text-xs font-medium text-muted-foreground mb-1">Push URL</p>
+                                <code className="text-xs font-mono bg-muted px-2 py-1 rounded block break-all">
+                                  {log.pushConfigId ?? 'Unknown endpoint'}
+                                </code>
+                              </div>
 
-                            {/* Expanded Details */}
-                            {isExpanded && (
-                              <div className="mt-3 pt-3 border-t space-y-3">
-                                {log.errorMessage && (
-                                  <Alert variant="destructive">
+                              {/* Response Status */}
+                              {log.responseStatus !== null && (
+                                <div>
+                                  <p className="text-xs font-medium text-muted-foreground mb-1">Response Status</p>
+                                  <Badge
+                                    variant={log.responseStatus >= 200 && log.responseStatus < 300 ? 'default' : 'destructive'}
+                                    className={`text-xs ${log.responseStatus >= 200 && log.responseStatus < 300 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0' : ''}`}
+                                  >
+                                    {log.responseStatus}
+                                  </Badge>
+                                </div>
+                              )}
+
+                              {/* Request Body */}
+                              {log.requestBody && (
+                                <div>
+                                  <p className="text-xs font-medium text-muted-foreground mb-1">Request Body</p>
+                                  <pre className="bg-muted rounded-lg p-3 text-xs font-mono overflow-x-auto max-h-40 overflow-y-auto">
+                                    {tryParseJson(log.requestBody)}
+                                  </pre>
+                                </div>
+                              )}
+
+                              {/* Response Body */}
+                              {log.responseBody && (
+                                <div>
+                                  <p className="text-xs font-medium text-muted-foreground mb-1">Response Body</p>
+                                  <pre className="bg-muted rounded-lg p-3 text-xs font-mono overflow-x-auto max-h-40 overflow-y-auto">
+                                    {tryParseJson(log.responseBody)}
+                                  </pre>
+                                </div>
+                              )}
+
+                              {/* Error Message */}
+                              {log.errorMessage && (
+                                <div>
+                                  <p className="text-xs font-medium text-muted-foreground mb-1">Error</p>
+                                  <Alert variant="destructive" className="py-2 px-3">
                                     <AlertCircle className="size-4" />
-                                    <AlertTitle>Error</AlertTitle>
-                                    <AlertDescription>
+                                    <AlertDescription className="text-xs">
                                       {log.errorMessage}
                                     </AlertDescription>
                                   </Alert>
-                                )}
-                                <div>
-                                  <p className="text-xs font-semibold text-muted-foreground mb-1">
-                                    Request Body
-                                  </p>
-                                  <pre className="text-xs bg-muted rounded-md p-3 overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-all">
-                                    {log.requestBody
-                                      ? tryParseJson(log.requestBody)
-                                      : '(empty)'}
-                                  </pre>
                                 </div>
-                                <div>
-                                  <p className="text-xs font-semibold text-muted-foreground mb-1">
-                                    Response Body
-                                  </p>
-                                  <pre
-                                    className={`text-xs rounded-md p-3 overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-all ${
-                                      isSuccess
-                                        ? 'bg-emerald-50 dark:bg-emerald-950/30'
-                                        : 'bg-red-50 dark:bg-red-950/30'
-                                    }`}
-                                  >
-                                    {log.responseBody
-                                      ? tryParseJson(log.responseBody)
-                                      : '(empty)'}
-                                  </pre>
-                                </div>
-                              </div>
-                            )}
-                          </CardContent>
-                        </Card>
-                      )
-                    })}
-                  </div>
-                </ScrollArea>
-              )}
+                              )}
 
-              {/* Log count */}
-              {!loading && pushLogs.length > 0 && (
-                <p className="text-xs text-muted-foreground text-center mt-3">
-                  {pushLogs.length} log {pushLogs.length === 1 ? 'entry' : 'entries'}
-                </p>
+                              {/* Timestamp */}
+                              <p className="text-[11px] text-muted-foreground">
+                                Pushed at: {new Date(log.pushedAt).toLocaleString()}
+                              </p>
+                            </div>
+                          </div>
+                        </CollapsibleContent>
+                      </Card>
+                    </Collapsible>
+                  ))}
+                </div>
               )}
             </div>
           </TabsContent>
         </Tabs>
       </main>
 
-      {/* ── Footer ──────────────────────────────────────────────────────── */}
-      <footer className="mt-auto border-t">
-        <div className="max-w-2xl mx-auto px-4 py-3 text-center text-xs text-muted-foreground">
-          NotifyPush — Notification Manager
-        </div>
-      </footer>
-
-      {/* ── Notification Detail Dialog ──────────────────────────────────── */}
+      {/* ── Notification Detail Dialog ────────────────────────────────────── */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
-          {selectedNotif && (
-            <>
-              <DialogHeader>
-                <div className="flex items-center gap-1.5 flex-wrap mb-1">
-                  <Badge variant="secondary" className="text-xs">
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {selectedNotif && (
+                <>
+                  <Badge variant="secondary" className="text-xs font-medium">
                     {selectedNotif.appName}
                   </Badge>
-                  {!selectedNotif.isRead && (
-                    <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-xs">
-                      <MailOpen className="size-3 mr-0.5" />
-                      Unread
-                    </Badge>
-                  )}
-                  {selectedNotif.isFiltered && (
-                    <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-0 text-xs">
-                      <Filter className="size-3 mr-0.5" />
-                      Filtered
-                    </Badge>
-                  )}
-                  {selectedNotif.isPushed ? (
-                    <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-xs">
-                      <ArrowUpRight className="size-3 mr-0.5" />
-                      Pushed
-                    </Badge>
-                  ) : (
-                    <Badge
-                      variant="outline"
-                      className="text-xs text-muted-foreground"
-                    >
-                      <Clock className="size-3 mr-0.5" />
-                      Pending
-                    </Badge>
-                  )}
-                  {selectedNotif.prefix && (
-                    <Badge
-                      variant="outline"
-                      className="text-xs font-mono"
-                    >
-                      {selectedNotif.prefix}
-                    </Badge>
-                  )}
-                </div>
-                <DialogTitle className="text-left">
                   {selectedNotif.title}
-                </DialogTitle>
-                <DialogDescription className="text-left">
-                  {formatRelativeTime(selectedNotif.createdAt)}
-                </DialogDescription>
-              </DialogHeader>
-              <Separator />
-              <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                {selectedNotif.message}
+                </>
+              )}
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              Notification details
+            </DialogDescription>
+          </DialogHeader>
+          {selectedNotif && (
+            <div className="space-y-4">
+              {/* Status Badges */}
+              <div className="flex flex-wrap gap-1.5">
+                {!selectedNotif.isRead && (
+                  <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-xs">
+                    <Mail className="size-3 mr-0.5" />
+                    Unread
+                  </Badge>
+                )}
+                {selectedNotif.isRead && (
+                  <Badge variant="outline" className="text-xs text-muted-foreground">
+                    <MailOpen className="size-3 mr-0.5" />
+                    Read
+                  </Badge>
+                )}
+                {selectedNotif.isFiltered && (
+                  <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-0 text-xs">
+                    <Filter className="size-3 mr-0.5" />
+                    Filtered
+                  </Badge>
+                )}
+                {selectedNotif.isPushed ? (
+                  <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-xs">
+                    <Send className="size-3 mr-0.5" />
+                    Pushed
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-xs text-muted-foreground">
+                    <Clock className="size-3 mr-0.5" />
+                    Pending
+                  </Badge>
+                )}
+                {selectedNotif.prefix && (
+                  <Badge variant="outline" className="text-xs">
+                    Prefix: <code className="ml-1 font-mono">{selectedNotif.prefix}</code>
+                  </Badge>
+                )}
               </div>
+
+              {/* Message */}
+              <div>
+                <p className="text-sm text-foreground whitespace-pre-wrap">
+                  {selectedNotif.message}
+                </p>
+              </div>
+
+              {/* Metadata */}
+              <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                <span>Created: {new Date(selectedNotif.createdAt).toLocaleString()}</span>
+                <span>Updated: {new Date(selectedNotif.updatedAt).toLocaleString()}</span>
+              </div>
+
               <Separator />
-              <div className="flex justify-end gap-2">
+
+              {/* Actions */}
+              <div className="flex justify-between">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setDetailOpen(false)}
+                >
+                  Close
+                </Button>
                 <Button
                   variant="destructive"
                   size="sm"
@@ -2283,15 +1957,8 @@ export default function Home() {
                   <Trash2 className="size-3.5" />
                   Delete
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setDetailOpen(false)}
-                >
-                  Close
-                </Button>
               </div>
-            </>
+            </div>
           )}
         </DialogContent>
       </Dialog>

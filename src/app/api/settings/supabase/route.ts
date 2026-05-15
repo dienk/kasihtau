@@ -4,6 +4,9 @@ import {
   saveSupabaseDbConfig,
   removeSupabaseDbConfig,
   isSupabaseConfigured,
+  testSupabaseDbConnection,
+  markSupabaseTablesReady,
+  SUPABASE_SETUP_SQL,
 } from '@/lib/supabase-db'
 
 // GET /api/settings/supabase - Get Supabase database config (mask anonKey)
@@ -41,7 +44,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { url, anonKey, isActive } = body
+    const { url, anonKey } = body
 
     if (!url || !anonKey) {
       return NextResponse.json(
@@ -96,6 +99,89 @@ export async function DELETE() {
     console.error('Error deleting supabase config:', error)
     return NextResponse.json(
       { error: 'Failed to delete Supabase config' },
+      { status: 500 }
+    )
+  }
+}
+
+// PATCH /api/settings/supabase - Test connection or get setup SQL
+export async function PATCH(request: NextRequest) {
+  try {
+    const body = await request.json().catch(() => ({}))
+    const { action } = body as { action?: string }
+
+    if (action === 'test') {
+      if (!isSupabaseConfigured()) {
+        return NextResponse.json(
+          { ok: false, error: 'Supabase not configured' },
+          { status: 400 }
+        )
+      }
+
+      const result = await testSupabaseDbConnection()
+
+      if (result.ok && result.tablesExist) {
+        markSupabaseTablesReady(true)
+      }
+
+      return NextResponse.json(result)
+    }
+
+    if (action === 'setup') {
+      if (!isSupabaseConfigured()) {
+        return NextResponse.json(
+          { ok: false, error: 'No active Supabase configuration found' },
+          { status: 400 }
+        )
+      }
+
+      const config = getSupabaseDbConfig()
+      const projectRef = config.url.replace('https://', '').replace('.supabase.co', '')
+      const sqlEditorLink = `https://supabase.com/dashboard/project/${projectRef}/sql/new`
+
+      const result = await testSupabaseDbConnection()
+
+      if (!result.ok) {
+        const errMsg = (result.error || '').toLowerCase()
+        const isMissingTableError =
+          errMsg.includes('could not find') ||
+          errMsg.includes('does not exist') ||
+          errMsg.includes('not found') ||
+          errMsg.includes('relation') ||
+          errMsg.includes('schema cache')
+
+        if (isMissingTableError) {
+          markSupabaseTablesReady(false)
+          return NextResponse.json({
+            ok: true,
+            tablesExist: false,
+            sql: SUPABASE_SETUP_SQL,
+            sqlEditorLink,
+          })
+        }
+
+        return NextResponse.json({ ok: false, error: result.error, sqlEditorLink })
+      }
+
+      if (result.tablesExist) {
+        markSupabaseTablesReady(true)
+        return NextResponse.json({ ok: true, tablesExist: true, sqlEditorLink })
+      }
+
+      markSupabaseTablesReady(false)
+      return NextResponse.json({
+        ok: true,
+        tablesExist: false,
+        sql: SUPABASE_SETUP_SQL,
+        sqlEditorLink,
+      })
+    }
+
+    return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
+  } catch (error) {
+    console.error('Error in supabase action:', error)
+    return NextResponse.json(
+      { error: 'Failed to perform action' },
       { status: 500 }
     )
   }
