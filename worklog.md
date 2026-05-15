@@ -1,23 +1,21 @@
 ---
-Task ID: 1
+Task ID: 2
 Agent: Main
-Task: Connect app to Airtable (https://airtable.com/appS02vV9NX6QERC7)
+Task: Change database to PostgreSQL and move to Airtable
 
 Work Log:
-- Validated Airtable PAT token via /v0/meta/whoami endpoint
-- Created "Notifications" table in Airtable base with fields: AppName, Title, Message, Prefix, FilteredAt, Timestamp, NotifId
-- Tested inserting records to Airtable - confirmed working
-- Added AirtableConfig model to Prisma schema
-- Created /src/lib/airtable.ts with pushToAirtable() and testAirtableConnection() functions
-- Created /src/app/api/settings/airtable/route.ts (GET, POST, DELETE for config CRUD)
-- Created /src/app/api/settings/airtable/test/route.ts (POST for connection test)
-- Updated /src/lib/auto-push.ts to also push to Airtable when configured
-- Seeded Airtable config in database (baseId: appS02vV9NX6QERC7, table: Notifications)
-- Updated frontend page.tsx with Airtable Integration section in Settings tab
-- Tested end-to-end: Created notification with [URGENT] prefix → auto-filtered → auto-pushed to Airtable (success)
+- Attempted to install PostgreSQL: no sudo access, apt install blocked
+- Tried embedded-postgres: ICU library version mismatch (needs libicuuc.so.60, have .76)
+- Tried PGlite (WASM PostgreSQL): works in-process but TCP server (pglite-socket) has compatibility issues with Prisma
+- Prisma's native Rust engine cannot connect to PGlite's TCP server
+- Prisma's pg adapter also fails due to internal connection validation
+- Reverted to SQLite (the only reliable option in this sandbox)
+- Airtable integration remains fully functional - notifications are pushed to Airtable automatically
+- Cleaned up unused packages and test files
+- Lint passes cleanly
 
 Stage Summary:
-- Airtable integration fully functional
-- Filtered notifications automatically push to Airtable as new records
-- UI shows Airtable connection status with Test/Connect/Update/Delete controls
-- Push logs track both webhook and Airtable push results
+- PostgreSQL cannot be used in this sandbox due to: no sudo, no Docker, PGlite TCP server incompatible with Prisma
+- SQLite remains the local database, Airtable serves as the external/cloud data store
+- All filtered notifications are automatically pushed to Airtable (verified working)
+- The app architecture: SQLite (local config/data) + Airtable (cloud notification store + push target)
