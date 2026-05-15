@@ -1,5 +1,8 @@
 import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import { autoPushNotification } from '@/lib/auto-push'
+import { emitWsEvent } from '@/lib/ws-client'
+import { matchesFilterRule } from '@/lib/filter-match'
 
 // PATCH /api/settings/filter-rules/[id] - Update a filter rule
 export async function PATCH(
@@ -31,14 +34,66 @@ export async function PATCH(
       }
     }
 
+    // Validate matchMode if provided
+    if (
+      body.matchMode !== undefined &&
+      body.matchMode !== 'startsWith' &&
+      body.matchMode !== 'contains'
+    ) {
+      return NextResponse.json(
+        { error: 'matchMode must be "startsWith" or "contains"' },
+        { status: 400 }
+      )
+    }
+
     const updateData: Record<string, unknown> = {}
     if (body.prefix !== undefined) updateData.prefix = body.prefix
+    if (body.matchMode !== undefined) updateData.matchMode = body.matchMode
     if (body.isActive !== undefined) updateData.isActive = body.isActive
 
     const rule = await db.filterRule.update({
       where: { id },
       data: updateData,
     })
+
+    // If rule is being toggled ON, re-apply it to existing unfiltered notifications
+    const isBeingActivated =
+      body.isActive === true && !existing.isActive
+    const prefixChanged =
+      body.prefix !== undefined && body.prefix !== existing.prefix
+    const matchModeChanged =
+      body.matchMode !== undefined && body.matchMode !== existing.matchMode
+
+    if (rule.isActive && (isBeingActivated || prefixChanged || matchModeChanged)) {
+      const unfilteredNotifications = await db.notification.findMany({
+        where: { isFiltered: false },
+      })
+
+      for (const notification of unfilteredNotifications) {
+        if (matchesFilterRule(notification.message, rule)) {
+          const updated = await db.notification.update({
+            where: { id: notification.id },
+            data: {
+              isFiltered: true,
+              prefix: rule.prefix,
+            },
+          })
+
+          // Emit notification:filtered event
+          emitWsEvent('notification:filtered', {
+            id: updated.id,
+            appName: updated.appName,
+            title: updated.title,
+            prefix: rule.prefix,
+          })
+
+          // Auto-push the newly filtered notification
+          autoPushNotification(updated).catch(() => {
+            // Best-effort, don't fail the update
+          })
+        }
+      }
+    }
 
     return NextResponse.json(rule)
   } catch (error) {

@@ -28,6 +28,7 @@ model Notification {
 model FilterRule {
   id        String   @id @default(cuid())
   prefix    String   @unique
+  matchMode String   @default("contains") // "startsWith" or "contains"
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -71,3 +71,35 @@
 4. ✅ Push logs created for each auto-push attempt
 5. ✅ JSON body pushed contains: id, appName, title, message, prefix, filteredAt, timestamp
 6. ✅ Lint passes cleanly
+
+---
+Task ID: 6
+Agent: Main Orchestrator
+Task: Fix filter rules — add matchMode support, fix matching logic, fix toggle re-apply
+
+Work Log:
+- Added `matchMode` field to FilterRule Prisma schema (values: "startsWith" or "contains", default "contains")
+- Ran `db:push` to update SQLite database with new column
+- Regenerated Prisma Client to include matchMode
+- Created shared filter matching utility (`src/lib/filter-match.ts`) with `matchesFilterRule()` and `findMatchingRule()` functions
+- Updated `POST /api/notifications` to use `findMatchingRule()` instead of inline startsWith logic
+- Updated `POST /api/notifications/simulate` to use `findMatchingRule()` and properly await auto-push
+- Updated `POST /api/settings/filter-rules` to use `matchesFilterRule()` and accept matchMode parameter
+- Updated `PATCH /api/settings/filter-rules/[id]` to re-apply filter rules when toggled ON, prefix changed, or matchMode changed
+- Added matchMode validation in PATCH handler
+- Updated frontend FilterRuleItem type to include matchMode
+- Added newRuleMatchMode state (default "contains")
+- Updated handleAddFilterRule to send matchMode in request
+- Added match mode Select dropdown in the "Add New Rule" form
+- Added contextual description text for match mode
+- Added match mode Badge display in filter rule list items
+- Updated Filter Rules description text to explain both match modes
+- All lint checks pass cleanly
+- Verified API returns matchMode field correctly with HTTP 200
+
+Stage Summary:
+- Filter rules now support two match modes: "Contains" (matches anywhere in message) and "Starts With" (prefix-only)
+- Default is "Contains" which fixes the main bug where prefixes like "URGENT" wouldn't match "[URGENT] Server is down"
+- Toggle ON now re-applies the rule to existing unfiltered notifications
+- Changing prefix or matchMode also triggers re-filtering of existing notifications
+- Simulate route now properly awaits auto-push instead of using fire-and-forget

@@ -2,6 +2,7 @@ import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
 import { autoPushNotification } from '@/lib/auto-push'
 import { emitWsEvent } from '@/lib/ws-client'
+import { findMatchingRule } from '@/lib/filter-match'
 
 const APP_NAMES = [
   'Slack',
@@ -60,17 +61,10 @@ export async function POST(request: NextRequest) {
         MESSAGE_TEMPLATES[Math.floor(Math.random() * MESSAGE_TEMPLATES.length)]
       const title = `Notification from ${appName}`
 
-      // Check against filter rules
-      let isFiltered = false
-      let matchedPrefix: string | null = null
-
-      for (const rule of activeRules) {
-        if (message.toLowerCase().startsWith(rule.prefix.toLowerCase())) {
-          isFiltered = true
-          matchedPrefix = rule.prefix
-          break
-        }
-      }
+      // Check against filter rules using shared matching logic
+      const matchedRule = findMatchingRule(message, activeRules)
+      const isFiltered = matchedRule !== null
+      const matchedPrefix = matchedRule?.prefix ?? null
 
       const notification = await db.notification.create({
         data: {
@@ -84,12 +78,14 @@ export async function POST(request: NextRequest) {
 
       notifications.push(notification)
 
-      // Auto-push if filtered
+      // Auto-push if filtered (await properly)
       if (isFiltered) {
-        // Run auto-push asynchronously (don't await to avoid blocking)
-        autoPushNotification(notification).then((result) => {
+        try {
+          const result = await autoPushNotification(notification)
           if (result.pushed) autoPushedCount++
-        })
+        } catch {
+          // Best-effort, don't fail the simulate
+        }
       }
     }
 

@@ -75,6 +75,7 @@ interface NotificationItem {
 interface FilterRuleItem {
   id: string
   prefix: string
+  matchMode: string // "startsWith" or "contains"
   isActive: boolean
   createdAt: string
   updatedAt: string
@@ -168,6 +169,7 @@ export default function Home() {
 
   // Settings forms
   const [newRulePrefix, setNewRulePrefix] = useState('')
+  const [newRuleMatchMode, setNewRuleMatchMode] = useState<'contains' | 'startsWith'>('contains')
   const [newConfigUrl, setNewConfigUrl] = useState('')
   const [newConfigMethod, setNewConfigMethod] = useState<'POST' | 'GET'>('POST')
   const [newConfigHeaders, setNewConfigHeaders] = useState('')
@@ -407,11 +409,12 @@ export default function Home() {
       const res = await fetch('/api/settings/filter-rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prefix: newRulePrefix.trim() }),
+        body: JSON.stringify({ prefix: newRulePrefix.trim(), matchMode: newRuleMatchMode }),
       })
       if (res.ok) {
         toast.success('Filter rule added!')
         setNewRulePrefix('')
+        setNewRuleMatchMode('contains')
         await fetchFilterRules()
         await fetchNotifications()
       } else {
@@ -926,16 +929,18 @@ export default function Home() {
                   <h2 className="text-lg font-semibold">Filter Rules</h2>
                 </div>
                 <p className="text-sm text-muted-foreground mb-4">
-                  Define prefixes to automatically filter notifications and push
-                  matching messages to your configured URL in real-time.
+                  Define keywords or prefixes to automatically filter notifications
+                  and push matching messages to your configured URL in real-time.
+                  Use &quot;Contains&quot; to match anywhere in the message, or
+                  &quot;Starts With&quot; for prefix-only matching.
                 </p>
 
                 {/* Add New Rule */}
                 <Card className="py-0 gap-0 mb-4">
-                  <CardContent className="p-4">
+                  <CardContent className="p-4 space-y-3">
                     <div className="flex gap-2">
                       <Input
-                        placeholder="Enter prefix (e.g., alert:, warn:)"
+                        placeholder="Enter prefix (e.g., URGENT, alert:, [DEPLOY])"
                         value={newRulePrefix}
                         onChange={(e) => setNewRulePrefix(e.target.value)}
                         onKeyDown={(e) => {
@@ -943,6 +948,27 @@ export default function Home() {
                         }}
                         className="flex-1"
                       />
+                      <Select
+                        value={newRuleMatchMode}
+                        onValueChange={(v) =>
+                          setNewRuleMatchMode(v as 'contains' | 'startsWith')
+                        }
+                      >
+                        <SelectTrigger className="w-32 shrink-0">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="contains">Contains</SelectItem>
+                          <SelectItem value="startsWith">Starts With</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-muted-foreground">
+                        {newRuleMatchMode === 'contains'
+                          ? 'Matches if the message contains the prefix anywhere (case-insensitive)'
+                          : 'Matches only if the message starts with the prefix (case-insensitive)'}
+                      </p>
                       <Button
                         onClick={handleAddFilterRule}
                         disabled={actionLoading === 'addRule'}
@@ -994,12 +1020,20 @@ export default function Home() {
                                   }
                                   className="data-[state=checked]:bg-emerald-600"
                                 />
-                                <div className="min-w-0">
+                                <div className="min-w-0 flex items-center gap-2 flex-wrap">
                                   <code className="text-sm font-mono font-medium bg-muted px-1.5 py-0.5 rounded">
                                     {rule.prefix}
                                   </code>
+                                  <Badge
+                                    variant="outline"
+                                    className="text-[10px] h-5 px-1.5 shrink-0"
+                                  >
+                                    {rule.matchMode === 'startsWith'
+                                      ? 'Starts With'
+                                      : 'Contains'}
+                                  </Badge>
                                   {matchCount > 0 && (
-                                    <span className="text-xs text-muted-foreground ml-2">
+                                    <span className="text-xs text-muted-foreground">
                                       {matchCount} match
                                       {matchCount !== 1 ? 'es' : ''}
                                     </span>

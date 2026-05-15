@@ -2,6 +2,7 @@ import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
 import { autoPushNotification } from '@/lib/auto-push'
 import { emitWsEvent } from '@/lib/ws-client'
+import { matchesFilterRule } from '@/lib/filter-match'
 
 // GET /api/settings/filter-rules - List all filter rules
 export async function GET() {
@@ -25,7 +26,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { prefix, isActive } = body
+    const { prefix, matchMode, isActive } = body
 
     if (!prefix) {
       return NextResponse.json(
@@ -33,6 +34,12 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+
+    // Validate matchMode
+    const validMatchMode =
+      matchMode === 'startsWith' || matchMode === 'contains'
+        ? matchMode
+        : 'contains'
 
     // Check for duplicate prefix
     const existing = await db.filterRule.findUnique({ where: { prefix } })
@@ -46,6 +53,7 @@ export async function POST(request: NextRequest) {
     const rule = await db.filterRule.create({
       data: {
         prefix,
+        matchMode: validMatchMode,
         isActive: isActive !== undefined ? isActive : true,
       },
     })
@@ -57,11 +65,7 @@ export async function POST(request: NextRequest) {
       })
 
       for (const notification of unfilteredNotifications) {
-        if (
-          notification.message
-            .toLowerCase()
-            .startsWith(rule.prefix.toLowerCase())
-        ) {
+        if (matchesFilterRule(notification.message, rule)) {
           const updated = await db.notification.update({
             where: { id: notification.id },
             data: {

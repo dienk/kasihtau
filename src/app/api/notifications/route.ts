@@ -2,6 +2,7 @@ import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
 import { autoPushNotification } from '@/lib/auto-push'
 import { emitWsEvent } from '@/lib/ws-client'
+import { findMatchingRule } from '@/lib/filter-match'
 
 // GET /api/notifications - List all notifications with optional filters
 export async function GET(request: NextRequest) {
@@ -57,21 +58,15 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Check against active filter rules
+    // Check against active filter rules using shared matching logic
     const activeRules = await db.filterRule.findMany({
       where: { isActive: true },
     })
 
-    let isFiltered = false
-    let matchedPrefix: string | null = null
+    const matchedRule = findMatchingRule(message, activeRules)
 
-    for (const rule of activeRules) {
-      if (message.toLowerCase().startsWith(rule.prefix.toLowerCase())) {
-        isFiltered = true
-        matchedPrefix = rule.prefix
-        break
-      }
-    }
+    const isFiltered = matchedRule !== null
+    const matchedPrefix = matchedRule?.prefix ?? null
 
     const notification = await db.notification.create({
       data: {
