@@ -1,5 +1,7 @@
 import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import { autoPushNotification } from '@/lib/auto-push'
+import { emitWsEvent } from '@/lib/ws-client'
 
 // GET /api/notifications - List all notifications with optional filters
 export async function GET(request: NextRequest) {
@@ -42,7 +44,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/notifications - Create a new notification
+// POST /api/notifications - Create a new notification with auto-filter and auto-push
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -81,7 +83,26 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    return NextResponse.json(notification, { status: 201 })
+    // Emit notification:created event
+    emitWsEvent('notification:created', {
+      id: notification.id,
+      appName: notification.appName,
+      title: notification.title,
+      message: notification.message,
+      isFiltered,
+      prefix: matchedPrefix,
+    })
+
+    // Auto-push if filtered
+    let pushResult = null
+    if (isFiltered) {
+      pushResult = await autoPushNotification(notification)
+    }
+
+    return NextResponse.json(
+      { ...notification, autoPushResult: pushResult },
+      { status: 201 }
+    )
   } catch (error) {
     console.error('Error creating notification:', error)
     return NextResponse.json(

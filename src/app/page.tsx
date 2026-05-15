@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { io } from 'socket.io-client'
 import { toast } from 'sonner'
 import {
   Bell,
@@ -24,6 +25,9 @@ import {
   Mail,
   MailOpen,
   ArrowUpRight,
+  Wifi,
+  WifiOff,
+  Radio,
 } from 'lucide-react'
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -158,6 +162,10 @@ export default function Home() {
   // Push log expand
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null)
 
+  // WebSocket connection state
+  const [isWsConnected, setIsWsConnected] = useState(false)
+  const socketRef = useRef<ReturnType<typeof io> | null>(null)
+
   // Settings forms
   const [newRulePrefix, setNewRulePrefix] = useState('')
   const [newConfigUrl, setNewConfigUrl] = useState('')
@@ -228,6 +236,62 @@ export default function Home() {
   useEffect(() => {
     fetchAll()
   }, [fetchAll])
+
+  // ── WebSocket Connection ───────────────────────────────────────────────
+
+  useEffect(() => {
+    const socket = io('/?XTransformPort=3003', {
+      transports: ['websocket', 'polling'],
+      forceNew: true,
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+      timeout: 5000,
+    })
+    socketRef.current = socket
+
+    socket.on('connect', () => {
+      setIsWsConnected(true)
+    })
+
+    socket.on('disconnect', () => {
+      setIsWsConnected(false)
+    })
+
+    socket.on('notification:created', (data: { appName?: string }) => {
+      fetchNotifications()
+      toast.info(`New notification from ${data.appName ?? 'Unknown'}`)
+    })
+
+    socket.on('notification:filtered', (data: { prefix?: string }) => {
+      fetchNotifications()
+      toast('Filtered by "' + (data.prefix ?? 'unknown') + '"', {
+        icon: <Filter className="size-4 text-amber-500" />,
+      })
+    })
+
+    socket.on('notification:pushed', (data: { url?: string }) => {
+      fetchNotifications()
+      fetchPushLogs()
+      toast.success('Pushed to ' + (data.url ?? 'endpoint'))
+    })
+
+    socket.on('notification:push-failed', (data: { error?: string }) => {
+      fetchNotifications()
+      fetchPushLogs()
+      toast.error('Push failed: ' + (data.error ?? 'Unknown error'))
+    })
+
+    socket.on('notifications:bulk-created', (data: { count?: number }) => {
+      fetchNotifications()
+      toast.info(`${data.count ?? 0} new notifications received`)
+    })
+
+    return () => {
+      socket.disconnect()
+      socketRef.current = null
+    }
+  }, [fetchNotifications, fetchPushLogs])
 
   // ── Actions ────────────────────────────────────────────────────────────
 
@@ -529,6 +593,25 @@ export default function Home() {
               <BellRing className="size-4" />
             </div>
             <h1 className="text-lg font-bold tracking-tight">NotifyPush</h1>
+            {/* Live Activity Indicator */}
+            <div className="flex items-center gap-1 ml-1">
+              <div
+                className={`size-2 rounded-full ${
+                  isWsConnected
+                    ? 'bg-emerald-500 animate-pulse'
+                    : 'bg-red-500'
+                }`}
+              />
+              <span
+                className={`text-[10px] font-medium ${
+                  isWsConnected
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-red-500'
+                }`}
+              >
+                {isWsConnected ? 'Live' : 'Offline'}
+              </span>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {unreadCount > 0 && (
@@ -551,6 +634,34 @@ export default function Home() {
           </div>
         </div>
       </header>
+
+      {/* ── Connection Status Banner ─────────────────────────────────────── */}
+      {!isWsConnected && (
+        <div className="bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-800">
+          <div className="max-w-2xl mx-auto flex items-center justify-between px-4 py-2">
+            <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
+              <WifiOff className="size-4" />
+              <span className="text-xs font-medium">
+                Real-time updates disconnected — data may be delayed
+              </span>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs text-amber-700 dark:text-amber-400 hover:text-amber-900 dark:hover:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/50 gap-1"
+              onClick={() => {
+                if (socketRef.current) {
+                  socketRef.current.disconnect()
+                  socketRef.current.connect()
+                }
+              }}
+            >
+              <Radio className="size-3" />
+              Reconnect
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* ── Main Content ────────────────────────────────────────────────── */}
       <main className="flex-1 max-w-2xl mx-auto w-full">
@@ -675,7 +786,7 @@ export default function Home() {
                       actionLoading === 'push' ? 'animate-pulse' : ''
                     }`}
                   />
-                  Push All
+                  Retry Failed
                 </Button>
                 {unreadCount > 0 && (
                   <Button
@@ -815,8 +926,8 @@ export default function Home() {
                   <h2 className="text-lg font-semibold">Filter Rules</h2>
                 </div>
                 <p className="text-sm text-muted-foreground mb-4">
-                  Define prefixes to automatically filter and match incoming
-                  notifications.
+                  Define prefixes to automatically filter notifications and push
+                  matching messages to your configured URL in real-time.
                 </p>
 
                 {/* Add New Rule */}
@@ -919,10 +1030,16 @@ export default function Home() {
                 <div className="flex items-center gap-2 mb-4">
                   <Globe className="size-5 text-emerald-600" />
                   <h2 className="text-lg font-semibold">Push Configuration</h2>
+                  {pushConfigs.some((c) => c.isActive) && (
+                    <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-xs gap-1">
+                      <Zap className="size-3" />
+                      Auto-Push
+                    </Badge>
+                  )}
                 </div>
                 <p className="text-sm text-muted-foreground mb-4">
-                  Configure endpoints where filtered notifications will be
-                  pushed.
+                  Filtered notifications are pushed here automatically in
+                  real-time. You can also manually push remaining ones.
                 </p>
 
                 {/* Add New Config */}

@@ -1,5 +1,7 @@
 import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import { autoPushNotification } from '@/lib/auto-push'
+import { emitWsEvent } from '@/lib/ws-client'
 
 // GET /api/settings/filter-rules - List all filter rules
 export async function GET() {
@@ -19,6 +21,7 @@ export async function GET() {
 }
 
 // POST /api/settings/filter-rules - Create a new filter rule
+// Auto-filters existing notifications AND auto-pushes them if push config is active
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -59,12 +62,25 @@ export async function POST(request: NextRequest) {
             .toLowerCase()
             .startsWith(rule.prefix.toLowerCase())
         ) {
-          await db.notification.update({
+          const updated = await db.notification.update({
             where: { id: notification.id },
             data: {
               isFiltered: true,
               prefix: rule.prefix,
             },
+          })
+
+          // Emit notification:filtered event
+          emitWsEvent('notification:filtered', {
+            id: updated.id,
+            appName: updated.appName,
+            title: updated.title,
+            prefix: rule.prefix,
+          })
+
+          // Auto-push the newly filtered notification
+          autoPushNotification(updated).catch(() => {
+            // Best-effort, don't fail the rule creation
           })
         }
       }

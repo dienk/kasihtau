@@ -1,5 +1,7 @@
 import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import { autoPushNotification } from '@/lib/auto-push'
+import { emitWsEvent } from '@/lib/ws-client'
 
 const APP_NAMES = [
   'Slack',
@@ -50,6 +52,7 @@ export async function POST(request: NextRequest) {
     })
 
     const notifications = []
+    let autoPushedCount = 0
 
     for (let i = 0; i < count; i++) {
       const appName = APP_NAMES[Math.floor(Math.random() * APP_NAMES.length)]
@@ -80,12 +83,29 @@ export async function POST(request: NextRequest) {
       })
 
       notifications.push(notification)
+
+      // Auto-push if filtered
+      if (isFiltered) {
+        // Run auto-push asynchronously (don't await to avoid blocking)
+        autoPushNotification(notification).then((result) => {
+          if (result.pushed) autoPushedCount++
+        })
+      }
     }
+
+    // Emit bulk created event
+    emitWsEvent('notifications:bulk-created', {
+      count: notifications.length,
+      filtered: notifications.filter((n) => n.isFiltered).length,
+      appNames: [...new Set(notifications.map((n) => n.appName))],
+    })
 
     return NextResponse.json(
       {
         message: `Generated ${count} simulated notifications`,
         count: notifications.length,
+        filtered: notifications.filter((n) => n.isFiltered).length,
+        autoPushed: autoPushedCount,
         notifications,
       },
       { status: 201 }
