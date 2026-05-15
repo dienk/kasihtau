@@ -9,6 +9,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { db } from '@/lib/db'
 import { randomUUID } from 'crypto'
+import { join } from 'path'
+import { existsSync, readFileSync, writeFileSync } from 'fs'
 
 // ─── Config Management ─────────────────────────────────────────────────────
 
@@ -23,9 +25,7 @@ let cachedConfig: SupabaseDbConfig | null = null
 
 function getConfigPath(): string {
   try {
-    const { join } = require('path')
-    const { cwd } = require('process')
-    return join(cwd(), 'data', 'supabase-config.json')
+    return join(process.cwd(), 'data', 'supabase-config.json')
   } catch {
     return ''
   }
@@ -35,10 +35,9 @@ function readConfig(): SupabaseDbConfig {
   if (cachedConfig) return cachedConfig
 
   try {
-    const fs = require('fs')
     const configPath = getConfigPath()
-    if (configPath && fs.existsSync(configPath)) {
-      const raw = fs.readFileSync(configPath, 'utf-8')
+    if (configPath && existsSync(configPath)) {
+      const raw = readFileSync(configPath, 'utf-8')
       cachedConfig = JSON.parse(raw)
       return cachedConfig!
     }
@@ -51,10 +50,9 @@ function readConfig(): SupabaseDbConfig {
 function writeConfig(config: SupabaseDbConfig): void {
   cachedConfig = config
   try {
-    const fs = require('fs')
     const configPath = getConfigPath()
     if (configPath) {
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
+      writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
     }
   } catch (err) {
     console.error('[SupabaseDB] Failed to write config:', err)

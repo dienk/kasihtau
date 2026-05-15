@@ -1,5 +1,11 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
+//
+// To switch to Supabase PostgreSQL:
+// 1. Change provider from "sqlite" to "postgresql"
+// 2. Set DATABASE_URL in .env to your Supabase connection string
+//    (find it at: https://supabase.com/dashboard → Project → Settings → Database)
+// 3. Run: bun run db:push
 
 generator client {
   provider = "prisma-client-js"
