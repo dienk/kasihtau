@@ -1,5 +1,10 @@
-import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import {
+  getFilterRules,
+  createFilterRule,
+  getNotifications,
+  updateNotification,
+} from '@/lib/supabase-db'
 import { autoPushNotification } from '@/lib/auto-push'
 import { emitWsEvent } from '@/lib/ws-client'
 import { matchesFilterRule } from '@/lib/filter-match'
@@ -7,9 +12,7 @@ import { matchesFilterRule } from '@/lib/filter-match'
 // GET /api/settings/filter-rules - List all filter rules
 export async function GET() {
   try {
-    const rules = await db.filterRule.findMany({
-      orderBy: { createdAt: 'desc' },
-    })
+    const rules = await getFilterRules()
 
     return NextResponse.json(rules)
   } catch (error) {
@@ -41,56 +44,50 @@ export async function POST(request: NextRequest) {
         ? matchMode
         : 'contains'
 
-    // Check for duplicate prefix
-    const existing = await db.filterRule.findUnique({ where: { prefix } })
-    if (existing) {
-      return NextResponse.json(
-        { error: 'A filter rule with this prefix already exists' },
-        { status: 409 }
-      )
-    }
-
-    const rule = await db.filterRule.create({
-      data: {
+    try {
+      const rule = await createFilterRule({
         prefix,
         matchMode: validMatchMode,
         isActive: isActive !== undefined ? isActive : true,
-      },
-    })
-
-    // If the rule is active, check all existing unfiltered notifications
-    if (rule.isActive) {
-      const unfilteredNotifications = await db.notification.findMany({
-        where: { isFiltered: false },
       })
 
-      for (const notification of unfilteredNotifications) {
-        if (matchesFilterRule(notification.message, rule)) {
-          const updated = await db.notification.update({
-            where: { id: notification.id },
-            data: {
+      // If the rule is active, check all existing unfiltered notifications
+      if (rule.isActive) {
+        const unfilteredNotifications = await getNotifications({ isFiltered: false })
+
+        for (const notification of unfilteredNotifications) {
+          if (matchesFilterRule(notification.message, rule)) {
+            const updated = await updateNotification(notification.id, {
               isFiltered: true,
               prefix: rule.prefix,
-            },
-          })
+            })
 
-          // Emit notification:filtered event
-          emitWsEvent('notification:filtered', {
-            id: updated.id,
-            appName: updated.appName,
-            title: updated.title,
-            prefix: rule.prefix,
-          })
+            // Emit notification:filtered event
+            emitWsEvent('notification:filtered', {
+              id: updated.id,
+              appName: updated.appName,
+              title: updated.title,
+              prefix: rule.prefix,
+            })
 
-          // Auto-push the newly filtered notification
-          autoPushNotification(updated).catch(() => {
-            // Best-effort, don't fail the rule creation
-          })
+            // Auto-push the newly filtered notification
+            autoPushNotification(updated).catch(() => {
+              // Best-effort, don't fail the rule creation
+            })
+          }
         }
       }
-    }
 
-    return NextResponse.json(rule, { status: 201 })
+      return NextResponse.json(rule, { status: 201 })
+    } catch (err: any) {
+      if (err.message === 'DUPLICATE_PREFIX') {
+        return NextResponse.json(
+          { error: 'A filter rule with this prefix already exists' },
+          { status: 409 }
+        )
+      }
+      throw err
+    }
   } catch (error) {
     console.error('Error creating filter rule:', error)
     return NextResponse.json(

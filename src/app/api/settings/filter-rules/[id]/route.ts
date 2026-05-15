@@ -1,5 +1,12 @@
-import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import {
+  getFilterRuleById,
+  getFilterRuleByPrefix,
+  updateFilterRule,
+  deleteFilterRule,
+  getNotifications,
+  updateNotification,
+} from '@/lib/supabase-db'
 import { autoPushNotification } from '@/lib/auto-push'
 import { emitWsEvent } from '@/lib/ws-client'
 import { matchesFilterRule } from '@/lib/filter-match'
@@ -13,7 +20,7 @@ export async function PATCH(
     const { id } = await params
     const body = await request.json()
 
-    const existing = await db.filterRule.findUnique({ where: { id } })
+    const existing = await getFilterRuleById(id)
     if (!existing) {
       return NextResponse.json(
         { error: 'Filter rule not found' },
@@ -23,9 +30,7 @@ export async function PATCH(
 
     // If prefix is being changed, check for duplicates
     if (body.prefix && body.prefix !== existing.prefix) {
-      const duplicate = await db.filterRule.findUnique({
-        where: { prefix: body.prefix },
-      })
+      const duplicate = await getFilterRuleByPrefix(body.prefix)
       if (duplicate) {
         return NextResponse.json(
           { error: 'A filter rule with this prefix already exists' },
@@ -51,51 +56,53 @@ export async function PATCH(
     if (body.matchMode !== undefined) updateData.matchMode = body.matchMode
     if (body.isActive !== undefined) updateData.isActive = body.isActive
 
-    const rule = await db.filterRule.update({
-      where: { id },
-      data: updateData,
-    })
+    try {
+      const rule = await updateFilterRule(id, updateData)
 
-    // If rule is being toggled ON, re-apply it to existing unfiltered notifications
-    const isBeingActivated =
-      body.isActive === true && !existing.isActive
-    const prefixChanged =
-      body.prefix !== undefined && body.prefix !== existing.prefix
-    const matchModeChanged =
-      body.matchMode !== undefined && body.matchMode !== existing.matchMode
+      // If rule is being toggled ON, re-apply it to existing unfiltered notifications
+      const isBeingActivated =
+        body.isActive === true && !existing.isActive
+      const prefixChanged =
+        body.prefix !== undefined && body.prefix !== existing.prefix
+      const matchModeChanged =
+        body.matchMode !== undefined && body.matchMode !== existing.matchMode
 
-    if (rule.isActive && (isBeingActivated || prefixChanged || matchModeChanged)) {
-      const unfilteredNotifications = await db.notification.findMany({
-        where: { isFiltered: false },
-      })
+      if (rule.isActive && (isBeingActivated || prefixChanged || matchModeChanged)) {
+        const unfilteredNotifications = await getNotifications({ isFiltered: false })
 
-      for (const notification of unfilteredNotifications) {
-        if (matchesFilterRule(notification.message, rule)) {
-          const updated = await db.notification.update({
-            where: { id: notification.id },
-            data: {
+        for (const notification of unfilteredNotifications) {
+          if (matchesFilterRule(notification.message, rule)) {
+            const updated = await updateNotification(notification.id, {
               isFiltered: true,
               prefix: rule.prefix,
-            },
-          })
+            })
 
-          // Emit notification:filtered event
-          emitWsEvent('notification:filtered', {
-            id: updated.id,
-            appName: updated.appName,
-            title: updated.title,
-            prefix: rule.prefix,
-          })
+            // Emit notification:filtered event
+            emitWsEvent('notification:filtered', {
+              id: updated.id,
+              appName: updated.appName,
+              title: updated.title,
+              prefix: rule.prefix,
+            })
 
-          // Auto-push the newly filtered notification
-          autoPushNotification(updated).catch(() => {
-            // Best-effort, don't fail the update
-          })
+            // Auto-push the newly filtered notification
+            autoPushNotification(updated).catch(() => {
+              // Best-effort, don't fail the update
+            })
+          }
         }
       }
-    }
 
-    return NextResponse.json(rule)
+      return NextResponse.json(rule)
+    } catch (err: any) {
+      if (err.message === 'DUPLICATE_PREFIX') {
+        return NextResponse.json(
+          { error: 'A filter rule with this prefix already exists' },
+          { status: 409 }
+        )
+      }
+      throw err
+    }
   } catch (error) {
     console.error('Error updating filter rule:', error)
     return NextResponse.json(
@@ -113,7 +120,7 @@ export async function DELETE(
   try {
     const { id } = await params
 
-    const existing = await db.filterRule.findUnique({ where: { id } })
+    const existing = await getFilterRuleById(id)
     if (!existing) {
       return NextResponse.json(
         { error: 'Filter rule not found' },
@@ -121,7 +128,7 @@ export async function DELETE(
       )
     }
 
-    await db.filterRule.delete({ where: { id } })
+    await deleteFilterRule(id)
 
     return NextResponse.json({ message: 'Filter rule deleted' })
   } catch (error) {

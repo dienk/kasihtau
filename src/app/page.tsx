@@ -200,10 +200,12 @@ export default function Home() {
     isActive: boolean
   } | null>(null)
   const [sbUrl, setSbUrl] = useState('')
-  const [sbAnonKey, setSbAnonKey] = useState('')
+  const [sbAnonKey, setSbAnonKey] = useState('sb_publishable_a9GeIbcAeBuqx3bHZgHRiw_aXrLd8Ou')
   const [sbTesting, setSbTesting] = useState(false)
   const [sbSaving, setSbSaving] = useState(false)
   const [sbSetup, setSbSetup] = useState(false)
+  const [dbStatus, setDbStatus] = useState<'supabase' | 'local' | 'unknown'>('unknown')
+  const [sbSetupSql, setSbSetupSql] = useState<string | null>(null)
 
   // ── Data Fetching ──────────────────────────────────────────────────────
 
@@ -280,10 +282,15 @@ export default function Home() {
         if (data.length > 0) {
           setSupabaseConfig(data[0])
           setSbUrl(data[0].url)
+          setDbStatus('supabase')
+        } else {
+          setDbStatus('local')
         }
+      } else {
+        setDbStatus('local')
       }
     } catch {
-      // API not yet available
+      setDbStatus('local')
     }
   }, [])
 
@@ -717,8 +724,14 @@ export default function Home() {
       })
       if (res.ok) {
         toast.success(supabaseConfig ? 'Supabase config updated!' : 'Supabase connected!')
-        setSbAnonKey('')
+        setSbAnonKey('sb_publishable_a9GeIbcAeBuqx3bHZgHRiw_aXrLd8Ou')
+        setDbStatus('supabase')
         await fetchSupabaseConfig()
+        // Refresh all data from the new database
+        await fetchNotifications()
+        await fetchFilterRules()
+        await fetchPushConfigs()
+        await fetchPushLogs()
       } else {
         const data = await res.json().catch(() => ({}))
         toast.error(data.error || 'Failed to save Supabase config')
@@ -760,7 +773,15 @@ export default function Home() {
       })
       if (res.ok) {
         const data = await res.json()
-        toast.success(data.ok ? 'Supabase tables verified!' : `Setup issue: ${data.error || 'Unknown'}`)
+        if (data.ok && data.tablesExist) {
+          toast.success('Supabase tables verified!')
+          setSbSetupSql(null)
+        } else if (data.ok && data.sql) {
+          setSbSetupSql(data.sql)
+          toast.info('Tables need to be created. SQL shown below — run it in Supabase SQL Editor.')
+        } else {
+          toast.error(`Setup issue: ${data.error || 'Unknown'}`)
+        }
       } else {
         const data = await res.json().catch(() => ({}))
         toast.error(data.error || 'Failed to setup Supabase tables')
@@ -802,10 +823,15 @@ export default function Home() {
         method: 'DELETE',
       })
       if (res.ok) {
-        toast.success('Supabase config deleted')
+        toast.success('Supabase config deleted — using local database')
         setSupabaseConfig(null)
         setSbUrl('')
-        setSbAnonKey('')
+        setSbAnonKey('sb_publishable_a9GeIbcAeBuqx3bHZgHRiw_aXrLd8Ou')
+        setDbStatus('local')
+        setSbSetupSql(null)
+        await fetchNotifications()
+        await fetchFilterRules()
+        await fetchPushConfigs()
       } else {
         toast.error('Failed to delete Supabase config')
       }
@@ -895,6 +921,13 @@ export default function Home() {
                 }`}
               >
                 {isWsConnected ? 'Live' : 'Offline'}
+              </span>
+            </div>
+            {/* Database Status */}
+            <div className="flex items-center gap-1 ml-1" title={dbStatus === 'supabase' ? 'Using Supabase PostgreSQL' : dbStatus === 'local' ? 'Using local SQLite' : 'Checking database...'}>
+              <Database className={`size-3 ${dbStatus === 'supabase' ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`} />
+              <span className={`text-[10px] font-medium ${dbStatus === 'supabase' ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}>
+                {dbStatus === 'supabase' ? 'Supabase' : dbStatus === 'local' ? 'Local DB' : '...'}
               </span>
             </div>
           </div>
@@ -1470,20 +1503,26 @@ export default function Home() {
 
               <Separator />
 
-              {/* Supabase Integration Section */}
+              {/* Supabase Database Section */}
               <section>
                 <div className="flex items-center gap-2 mb-4">
                   <Server className="size-5 text-emerald-600" />
-                  <h2 className="text-lg font-semibold">Supabase Integration</h2>
-                  {supabaseConfig?.isActive && (
+                  <h2 className="text-lg font-semibold">Supabase Database</h2>
+                  {dbStatus === 'supabase' && (
                     <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-xs gap-1">
                       <Zap className="size-3" />
-                      Connected
+                      Active
+                    </Badge>
+                  )}
+                  {dbStatus === 'local' && (
+                    <Badge variant="outline" className="text-xs gap-1">
+                      <Database className="size-3" />
+                      Local SQLite
                     </Badge>
                   )}
                 </div>
                 <p className="text-sm text-muted-foreground mb-4">
-                  Sync filtered notifications to your Supabase PostgreSQL database automatically. Each filtered notification is stored as a record in the Notifications table.
+                  Use Supabase PostgreSQL as your primary database. All notifications, filter rules, push configs, and logs are stored in Supabase. When not connected, local SQLite is used as fallback.
                 </p>
 
                 {/* Supabase Config Form */}
@@ -1500,7 +1539,7 @@ export default function Home() {
                         />
                       </div>
                       <div>
-                        <label className="text-xs font-medium text-muted-foreground mb-1 block">Anon / Publishable Key</label>
+                        <label className="text-xs font-medium text-muted-foreground mb-1 block">Publishable / Anon Key</label>
                         <Input
                           type="password"
                           placeholder="sb_publishable_... or eyJ..."
@@ -1528,7 +1567,7 @@ export default function Home() {
                               className="gap-1.5"
                             >
                               <Database className={`size-3.5 ${sbSetup ? 'animate-pulse' : ''}`} />
-                              Setup
+                              Setup Tables
                             </Button>
                             <Button
                               variant="outline"
@@ -1556,6 +1595,39 @@ export default function Home() {
                   </CardContent>
                 </Card>
 
+                {/* Setup SQL Display */}
+                {sbSetupSql && (
+                  <Card className="py-0 gap-0 mb-4 border-amber-200 dark:border-amber-800">
+                    <CardContent className="p-4 space-y-3">
+                      <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
+                        <AlertCircle className="size-4" />
+                        <h3 className="text-sm font-semibold">Setup Required</h3>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Run the SQL below in your Supabase SQL Editor (<a href={`${sbUrl}/sql`} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">{sbUrl}/sql ↗</a>) to create the required tables. After running, click &quot;Setup Tables&quot; again to verify.
+                      </p>
+                      <div className="relative">
+                        <ScrollArea className="max-h-64">
+                          <pre className="text-xs bg-muted p-3 rounded-md overflow-x-auto whitespace-pre-wrap font-mono">
+                            {sbSetupSql}
+                          </pre>
+                        </ScrollArea>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="mt-2 gap-1.5"
+                          onClick={() => {
+                            navigator.clipboard.writeText(sbSetupSql)
+                            toast.success('SQL copied to clipboard!')
+                          }}
+                        >
+                          Copy SQL
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
                 {/* Connection Status Card */}
                 {supabaseConfig && (
                   <Card className="py-0 gap-0">
@@ -1574,7 +1646,7 @@ export default function Home() {
                               </code>
                               <span className="text-muted-foreground text-sm">→</span>
                               <code className="text-sm font-mono bg-muted px-1.5 py-0.5 rounded">
-                                Notifications
+                                PostgreSQL
                               </code>
                             </div>
                             <p className="text-xs text-muted-foreground mt-1">

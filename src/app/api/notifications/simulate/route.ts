@@ -1,5 +1,8 @@
-import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import {
+  createNotification,
+  getActiveFilterRules,
+} from '@/lib/supabase-db'
 import { autoPushNotification } from '@/lib/auto-push'
 import { emitWsEvent } from '@/lib/ws-client'
 import { findMatchingRule } from '@/lib/filter-match'
@@ -48,11 +51,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Get active filter rules to apply during creation
-    const activeRules = await db.filterRule.findMany({
-      where: { isActive: true },
-    })
+    const activeRules = await getActiveFilterRules()
 
-    const notifications = []
+    const notifications: Record<string, unknown>[] = []
     let autoPushedCount = 0
 
     for (let i = 0; i < count; i++) {
@@ -66,22 +67,20 @@ export async function POST(request: NextRequest) {
       const isFiltered = matchedRule !== null
       const matchedPrefix = matchedRule?.prefix ?? null
 
-      const notification = await db.notification.create({
-        data: {
-          appName,
-          title,
-          message,
-          isFiltered,
-          prefix: matchedPrefix,
-        },
+      const notification = await createNotification({
+        appName,
+        title,
+        message,
+        isFiltered,
+        prefix: matchedPrefix,
       })
 
-      notifications.push(notification)
+      notifications.push(notification as Record<string, unknown>)
 
       // Auto-push if filtered (await properly)
       if (isFiltered) {
         try {
-          const result = await autoPushNotification(notification)
+          const result = await autoPushNotification(notification as Parameters<typeof autoPushNotification>[0])
           if (result.pushed) autoPushedCount++
         } catch {
           // Best-effort, don't fail the simulate

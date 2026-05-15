@@ -1,5 +1,5 @@
-import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import { getPushLogs } from '@/lib/supabase-db'
 
 // GET /api/push-logs - List all push logs with notification data
 export async function GET(request: NextRequest) {
@@ -14,21 +14,7 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const logs = await db.pushLog.findMany({
-      orderBy: { pushedAt: 'desc' },
-      take: limit,
-      include: {
-        notification: {
-          select: {
-            id: true,
-            appName: true,
-            title: true,
-            message: true,
-            prefix: true,
-          },
-        },
-      },
-    })
+    const logs = await getPushLogs(limit)
 
     return NextResponse.json(logs)
   } catch (error) {

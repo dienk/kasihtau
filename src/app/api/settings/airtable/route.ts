@@ -1,16 +1,18 @@
-import { db } from '@/lib/db'
-import { testAirtableConnection } from '@/lib/airtable'
 import { NextRequest, NextResponse } from 'next/server'
+import {
+  getAllAirtableConfigs,
+  saveAirtableConfig,
+  deleteAirtableConfig,
+} from '@/lib/supabase-db'
+import { testAirtableConnection } from '@/lib/airtable'
 
 // GET /api/settings/airtable - Get Airtable config
 export async function GET() {
   try {
-    const configs = await db.airtableConfig.findMany({
-      orderBy: { createdAt: 'desc' },
-    })
+    const configs = await getAllAirtableConfigs()
 
     // Mask tokens in response
-    const masked = configs.map((c) => ({
+    const masked = configs.map((c: any) => ({
       ...c,
       token: c.token ? `${c.token.substring(0, 10)}...${c.token.slice(-4)}` : '',
     }))
@@ -54,34 +56,13 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Check if config already exists - upsert (only one config supported)
-    const existing = await db.airtableConfig.findFirst()
-
-    let config
-    if (existing) {
-      // If token contains "..." it means the user didn't change it, keep the old one
-      const actualToken = token.includes('...') ? existing.token : token
-      config = await db.airtableConfig.update({
-        where: { id: existing.id },
-        data: {
-          baseUrl: baseUrl || `https://airtable.com/${baseId}`,
-          baseId,
-          token: actualToken,
-          tableName: tblName,
-          isActive: isActive !== undefined ? isActive : true,
-        },
-      })
-    } else {
-      config = await db.airtableConfig.create({
-        data: {
-          baseUrl: baseUrl || `https://airtable.com/${baseId}`,
-          baseId,
-          token,
-          tableName: tblName,
-          isActive: isActive !== undefined ? isActive : true,
-        },
-      })
-    }
+    const config = await saveAirtableConfig({
+      baseUrl: baseUrl || `https://airtable.com/${baseId}`,
+      baseId,
+      token,
+      tableName: tblName,
+      isActive: isActive !== undefined ? isActive : true,
+    })
 
     // Mask token in response
     const masked = {
@@ -104,10 +85,7 @@ export async function POST(request: NextRequest) {
 // DELETE /api/settings/airtable - Delete Airtable config
 export async function DELETE() {
   try {
-    const existing = await db.airtableConfig.findFirst()
-    if (existing) {
-      await db.airtableConfig.delete({ where: { id: existing.id } })
-    }
+    await deleteAirtableConfig()
     return NextResponse.json({ message: 'Airtable config deleted' })
   } catch (error) {
     console.error('Error deleting airtable config:', error)

@@ -1,5 +1,5 @@
-import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import { getPushConfigById, updatePushConfig, deletePushConfig } from '@/lib/supabase-db'
 
 // PATCH /api/settings/push-config/[id] - Update a push config
 export async function PATCH(
@@ -10,7 +10,7 @@ export async function PATCH(
     const { id } = await params
     const body = await request.json()
 
-    const existing = await db.pushConfig.findUnique({ where: { id } })
+    const existing = await getPushConfigById(id)
     if (!existing) {
       return NextResponse.json(
         { error: 'Push config not found' },
@@ -36,10 +36,7 @@ export async function PATCH(
     }
     if (body.isActive !== undefined) updateData.isActive = body.isActive
 
-    const config = await db.pushConfig.update({
-      where: { id },
-      data: updateData,
-    })
+    const config = await updatePushConfig(id, updateData)
 
     return NextResponse.json(config)
   } catch (error) {
@@ -59,7 +56,7 @@ export async function DELETE(
   try {
     const { id } = await params
 
-    const existing = await db.pushConfig.findUnique({ where: { id } })
+    const existing = await getPushConfigById(id)
     if (!existing) {
       return NextResponse.json(
         { error: 'Push config not found' },
@@ -67,7 +64,7 @@ export async function DELETE(
       )
     }
 
-    await db.pushConfig.delete({ where: { id } })
+    await deletePushConfig(id)
 
     return NextResponse.json({ message: 'Push config deleted' })
   } catch (error) {

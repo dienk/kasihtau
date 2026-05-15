@@ -1,14 +1,17 @@
-import { db } from '@/lib/db'
-import { emitWsEvent } from '@/lib/ws-client'
 import { NextResponse } from 'next/server'
+import {
+  getActivePushConfigs,
+  getFilteredUnpushedNotifications,
+  createPushLog,
+  updateNotification,
+} from '@/lib/supabase-db'
+import { emitWsEvent } from '@/lib/ws-client'
 
 // POST /api/notifications/push - Push filtered but unpushed notifications to ALL active push configs
 export async function POST() {
   try {
     // Get ALL active push configs
-    const pushConfigs = await db.pushConfig.findMany({
-      where: { isActive: true },
-    })
+    const pushConfigs = await getActivePushConfigs()
 
     if (pushConfigs.length === 0) {
       return NextResponse.json(
@@ -17,14 +20,8 @@ export async function POST() {
       )
     }
 
-    // Get all filtered but unpushed notifications (or failed push status)
-    const notifications = await db.notification.findMany({
-      where: {
-        isFiltered: true,
-        isPushed: false,
-      },
-      orderBy: { createdAt: 'asc' },
-    })
+    // Get all filtered but unpushed notifications
+    const notifications = await getFilteredUnpushedNotifications()
 
     if (notifications.length === 0) {
       return NextResponse.json({
@@ -41,13 +38,17 @@ export async function POST() {
     let failedCount = 0
 
     for (const notification of notifications) {
+      const updatedStr = notification.updatedAt instanceof Date
+        ? notification.updatedAt.toISOString()
+        : String(notification.updatedAt)
+
       const requestBody = {
         id: notification.id,
         appName: notification.appName,
         title: notification.title,
         message: notification.message,
         prefix: notification.prefix,
-        filteredAt: notification.updatedAt.toISOString(),
+        filteredAt: updatedStr,
         timestamp: new Date().toISOString(),
       }
 
@@ -142,35 +143,29 @@ export async function POST() {
         }
 
         // Create push log entry
-        await db.pushLog.create({ data: logData })
+        await createPushLog(logData)
       }
 
       // Update notification status
       if (notifAnySuccess) {
         successCount++
-        await db.notification.update({
-          where: { id: notification.id },
-          data: {
-            isPushed: true,
-            pushStatus: 'success',
-          },
+        await updateNotification(notification.id, {
+          isPushed: true,
+          pushStatus: 'success',
         })
       } else if (notifAnyAttempt) {
         failedCount++
-        await db.notification.update({
-          where: { id: notification.id },
-          data: {
-            pushStatus: 'failed',
-          },
+        await updateNotification(notification.id, {
+          pushStatus: 'failed',
         })
       }
 
       results.push({
         notificationId: notification.id,
         title: notification.title,
-        status: notifAnySuccess ? 'success' : 'failed',
+        status: notifAnySuccess ? 'success' : ('failed' as string),
         configsPushed: pushConfigs.length,
-      })
+      } as Record<string, unknown>)
     }
 
     return NextResponse.json({

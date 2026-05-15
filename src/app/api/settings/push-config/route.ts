@@ -1,12 +1,10 @@
-import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import { getPushConfigs, createPushConfig } from '@/lib/supabase-db'
 
 // GET /api/settings/push-config - List all push configs
 export async function GET() {
   try {
-    const configs = await db.pushConfig.findMany({
-      orderBy: { createdAt: 'desc' },
-    })
+    const configs = await getPushConfigs()
 
     return NextResponse.json(configs)
   } catch (error) {
@@ -47,12 +45,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const config = await db.pushConfig.create({
-      data: {
-        url,
-        method: method || 'POST',
-        headers: headersStr,
-      },
+    const config = await createPushConfig({
+      url,
+      method: method || 'POST',
+      headers: headersStr,
     })
 
     return NextResponse.json(config, { status: 201 })

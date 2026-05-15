@@ -1,5 +1,9 @@
-import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import {
+  getNotificationById,
+  updateNotification,
+  deleteNotification,
+} from '@/lib/supabase-db'
 
 // PATCH /api/notifications/[id] - Update a notification
 export async function PATCH(
@@ -10,7 +14,7 @@ export async function PATCH(
     const { id } = await params
     const body = await request.json()
 
-    const existing = await db.notification.findUnique({ where: { id } })
+    const existing = await getNotificationById(id)
     if (!existing) {
       return NextResponse.json(
         { error: 'Notification not found' },
@@ -30,10 +34,7 @@ export async function PATCH(
       updateData.prefix = body.prefix
     }
 
-    const notification = await db.notification.update({
-      where: { id },
-      data: updateData,
-    })
+    const notification = await updateNotification(id, updateData)
 
     return NextResponse.json(notification)
   } catch (error) {
@@ -53,7 +54,7 @@ export async function DELETE(
   try {
     const { id } = await params
 
-    const existing = await db.notification.findUnique({ where: { id } })
+    const existing = await getNotificationById(id)
     if (!existing) {
       return NextResponse.json(
         { error: 'Notification not found' },
@@ -61,7 +62,7 @@ export async function DELETE(
       )
     }
 
-    await db.notification.delete({ where: { id } })
+    await deleteNotification(id)
 
     return NextResponse.json({ message: 'Notification deleted' })
   } catch (error) {

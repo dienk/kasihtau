@@ -1,5 +1,9 @@
-import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import {
+  getNotifications,
+  createNotification,
+  getActiveFilterRules,
+} from '@/lib/supabase-db'
 import { autoPushNotification } from '@/lib/auto-push'
 import { emitWsEvent } from '@/lib/ws-client'
 import { findMatchingRule } from '@/lib/filter-match'
@@ -11,29 +15,23 @@ export async function GET(request: NextRequest) {
     const filter = searchParams.get('filter')
     const search = searchParams.get('search')
 
-    const where: Record<string, unknown> = {}
+    const filters: Record<string, unknown> = {}
 
     if (filter === 'filtered') {
-      where.isFiltered = true
+      filters.isFiltered = true
     } else if (filter === 'unfiltered') {
-      where.isFiltered = false
+      filters.isFiltered = false
     } else if (filter === 'pushed') {
-      where.isPushed = true
+      filters.isPushed = true
     } else if (filter === 'unread') {
-      where.isRead = false
+      filters.isRead = false
     }
 
     if (search) {
-      where.OR = [
-        { title: { contains: search } },
-        { message: { contains: search } },
-      ]
+      filters.search = search
     }
 
-    const notifications = await db.notification.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-    })
+    const notifications = await getNotifications(filters)
 
     return NextResponse.json(notifications)
   } catch (error) {
@@ -59,23 +57,19 @@ export async function POST(request: NextRequest) {
     }
 
     // Check against active filter rules using shared matching logic
-    const activeRules = await db.filterRule.findMany({
-      where: { isActive: true },
-    })
+    const activeRules = await getActiveFilterRules()
 
     const matchedRule = findMatchingRule(message, activeRules)
 
     const isFiltered = matchedRule !== null
     const matchedPrefix = matchedRule?.prefix ?? null
 
-    const notification = await db.notification.create({
-      data: {
-        appName: appName || 'Unknown',
-        title,
-        message,
-        isFiltered,
-        prefix: matchedPrefix,
-      },
+    const notification = await createNotification({
+      appName: appName || 'Unknown',
+      title,
+      message,
+      isFiltered,
+      prefix: matchedPrefix,
     })
 
     // Emit notification:created event
@@ -89,7 +83,7 @@ export async function POST(request: NextRequest) {
     })
 
     // Auto-push if filtered
-    let pushResult = null
+    let pushResult: Record<string, unknown> | null = null
     if (isFiltered) {
       pushResult = await autoPushNotification(notification)
     }

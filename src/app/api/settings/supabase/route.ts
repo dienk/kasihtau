@@ -1,24 +1,33 @@
-import { db } from '@/lib/db'
-import { testSupabaseConnection } from '@/lib/supabase'
 import { NextRequest, NextResponse } from 'next/server'
+import {
+  getSupabaseDbConfig,
+  saveSupabaseDbConfig,
+  removeSupabaseDbConfig,
+  testSupabaseDbConnection,
+  isSupabaseConfigured,
+} from '@/lib/supabase-db'
 
-// GET /api/settings/supabase - List all Supabase configs (mask anonKey)
+// GET /api/settings/supabase - Get Supabase database config (mask anonKey)
 export async function GET() {
   try {
-    const configs = await db.supabaseConfig.findMany({
-      orderBy: { createdAt: 'desc' },
-    })
+    const config = getSupabaseDbConfig()
 
-    // Mask the anonKey in response: show first 10 chars + "..." + last 4 chars
-    const masked = configs.map((c) => ({
-      ...c,
+    if (!config.isConfigured) {
+      return NextResponse.json([])
+    }
+
+    // Mask the anonKey in response
+    const masked = {
+      id: 'supabase-db-config',
+      url: config.url,
       anonKey:
-        c.anonKey.length > 14
-          ? `${c.anonKey.substring(0, 10)}...${c.anonKey.slice(-4)}`
+        config.anonKey.length > 14
+          ? `${config.anonKey.substring(0, 10)}...${config.anonKey.slice(-4)}`
           : '****',
-    }))
+      isActive: true,
+    }
 
-    return NextResponse.json(masked)
+    return NextResponse.json([masked])
   } catch (error) {
     console.error('Error fetching supabase config:', error)
     return NextResponse.json(
@@ -28,7 +37,7 @@ export async function GET() {
   }
 }
 
-// POST /api/settings/supabase - Create or update Supabase config (upsert - only one)
+// POST /api/settings/supabase - Save Supabase database config
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -41,51 +50,33 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Test connection before saving
-    const testResult = await testSupabaseConnection({ url, anonKey })
+    // If anonKey contains "..." it means the user didn't change it, keep the old one
+    const currentConfig = getSupabaseDbConfig()
+    const actualAnonKey = anonKey.includes('...') ? currentConfig.anonKey : anonKey
 
-    if (!testResult.ok) {
+    const result = await saveSupabaseDbConfig(url, actualAnonKey)
+
+    if (!result.ok) {
       return NextResponse.json(
-        { error: `Connection test failed: ${testResult.error}` },
+        { error: `Connection test failed: ${result.error}` },
         { status: 400 }
       )
     }
 
-    // Check if config already exists - upsert (only one config supported)
-    const existing = await db.supabaseConfig.findFirst()
-
-    let config
-    if (existing) {
-      // If anonKey contains "..." it means the user didn't change it, keep the old one
-      const actualAnonKey = anonKey.includes('...') ? existing.anonKey : anonKey
-      config = await db.supabaseConfig.update({
-        where: { id: existing.id },
-        data: {
-          url,
-          anonKey: actualAnonKey,
-          isActive: isActive !== undefined ? isActive : true,
-        },
-      })
-    } else {
-      config = await db.supabaseConfig.create({
-        data: {
-          url,
-          anonKey,
-          isActive: isActive !== undefined ? isActive : true,
-        },
-      })
-    }
+    const config = getSupabaseDbConfig()
 
     // Mask the anonKey in response
     const masked = {
-      ...config,
+      id: 'supabase-db-config',
+      url: config.url,
       anonKey:
         config.anonKey.length > 14
           ? `${config.anonKey.substring(0, 10)}...${config.anonKey.slice(-4)}`
           : '****',
+      isActive: true,
     }
 
-    return NextResponse.json(masked, { status: existing ? 200 : 201 })
+    return NextResponse.json(masked)
   } catch (error) {
     console.error('Error saving supabase config:', error)
     return NextResponse.json(
@@ -95,13 +86,10 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// DELETE /api/settings/supabase - Delete Supabase config
+// DELETE /api/settings/supabase - Delete Supabase database config
 export async function DELETE() {
   try {
-    const existing = await db.supabaseConfig.findFirst()
-    if (existing) {
-      await db.supabaseConfig.delete({ where: { id: existing.id } })
-    }
+    removeSupabaseDbConfig()
     return NextResponse.json({ message: 'Supabase config deleted' })
   } catch (error) {
     console.error('Error deleting supabase config:', error)

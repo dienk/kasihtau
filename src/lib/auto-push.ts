@@ -1,4 +1,10 @@
-import { db } from '@/lib/db'
+import {
+  getActivePushConfigs,
+  getAirtableConfig,
+  getSupabasePushConfig,
+  createPushLog,
+  updateNotification,
+} from '@/lib/supabase-db'
 import { emitWsEvent } from './ws-client'
 import { pushToAirtable } from './airtable'
 import { pushToSupabase } from './supabase'
@@ -14,7 +20,7 @@ export async function autoPushNotification(notification: {
   title: string
   message: string
   prefix: string | null
-  updatedAt: Date
+  updatedAt: Date | string
 }) {
   // Emit notification:filtered event
   emitWsEvent('notification:filtered', {
@@ -25,19 +31,13 @@ export async function autoPushNotification(notification: {
   })
 
   // Get ALL active push configs
-  const pushConfigs = await db.pushConfig.findMany({
-    where: { isActive: true },
-  })
+  const pushConfigs = await getActivePushConfigs()
 
   // Get active Airtable config
-  const airtableConfig = await db.airtableConfig.findFirst({
-    where: { isActive: true },
-  })
+  const airtableConfig = await getAirtableConfig()
 
-  // Get active Supabase config
-  const supabaseConfig = await db.supabaseConfig.findFirst({
-    where: { isActive: true },
-  })
+  // Get active Supabase push config
+  const supabaseConfig = await getSupabasePushConfig()
 
   const hasPushTargets = pushConfigs.length > 0 || airtableConfig || supabaseConfig
 
@@ -46,13 +46,17 @@ export async function autoPushNotification(notification: {
     return { pushed: false, reason: 'no_active_config' }
   }
 
+  const updatedStr = notification.updatedAt instanceof Date
+    ? notification.updatedAt.toISOString()
+    : notification.updatedAt
+
   const requestBody = {
     id: notification.id,
     appName: notification.appName,
     title: notification.title,
     message: notification.message,
     prefix: notification.prefix,
-    filteredAt: notification.updatedAt.toISOString(),
+    filteredAt: updatedStr,
     timestamp: new Date().toISOString(),
   }
 
@@ -145,7 +149,7 @@ export async function autoPushNotification(notification: {
         error: errorMessage,
       })
     } finally {
-      await db.pushLog.create({ data: logData })
+      await createPushLog(logData)
     }
   }
 
@@ -165,33 +169,31 @@ export async function autoPushNotification(notification: {
           Title: notification.title,
           Message: notification.message,
           Prefix: notification.prefix,
-          FilteredAt: notification.updatedAt.toISOString(),
+          FilteredAt: updatedStr,
           Timestamp: new Date().toISOString(),
         }
       )
 
       // Log Airtable push
-      await db.pushLog.create({
-        data: {
-          notificationId: notification.id,
-          status: airtableResult.success ? 'success' : 'failed',
-          requestBody: JSON.stringify({
-            target: 'airtable',
-            baseId: airtableConfig.baseId,
-            tableName: airtableConfig.tableName,
-            record: {
-              NotifId: notification.id,
-              AppName: notification.appName,
-              Title: notification.title,
-              Message: notification.message,
-              Prefix: notification.prefix,
-            },
-          }),
-          responseBody: airtableResult.recordId
-            ? `Record ID: ${airtableResult.recordId}`
-            : undefined,
-          errorMessage: airtableResult.error || undefined,
-        },
+      await createPushLog({
+        notificationId: notification.id,
+        status: airtableResult.success ? 'success' : 'failed',
+        requestBody: JSON.stringify({
+          target: 'airtable',
+          baseId: airtableConfig.baseId,
+          tableName: airtableConfig.tableName,
+          record: {
+            NotifId: notification.id,
+            AppName: notification.appName,
+            Title: notification.title,
+            Message: notification.message,
+            Prefix: notification.prefix,
+          },
+        }),
+        responseBody: airtableResult.recordId
+          ? `Record ID: ${airtableResult.recordId}`
+          : undefined,
+        errorMessage: airtableResult.error || undefined,
       })
 
       if (airtableResult.success) {
@@ -214,18 +216,16 @@ export async function autoPushNotification(notification: {
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error'
-      await db.pushLog.create({
-        data: {
-          notificationId: notification.id,
-          status: 'failed',
-          requestBody: JSON.stringify({ target: 'airtable', error: errorMessage }),
-          errorMessage,
-        },
+      await createPushLog({
+        notificationId: notification.id,
+        status: 'failed',
+        requestBody: JSON.stringify({ target: 'airtable', error: errorMessage }),
+        errorMessage,
       })
     }
   }
 
-  // Push to Supabase if configured
+  // Push to Supabase (external project) if configured
   if (supabaseConfig) {
     anyAttempt = true
     try {
@@ -251,26 +251,24 @@ export async function autoPushNotification(notification: {
       )
 
       // Log Supabase push
-      await db.pushLog.create({
-        data: {
-          notificationId: notification.id,
-          status: supabaseResult.success ? 'success' : 'failed',
-          requestBody: JSON.stringify({
-            target: 'supabase',
-            url: supabaseConfig.url,
-            record: {
-              id: notification.id,
-              app_name: notification.appName,
-              title: notification.title,
-              message: notification.message,
-              prefix: notification.prefix,
-            },
-          }),
-          responseBody: supabaseResult.recordId
-            ? `Record ID: ${supabaseResult.recordId}`
-            : undefined,
-          errorMessage: supabaseResult.error || undefined,
-        },
+      await createPushLog({
+        notificationId: notification.id,
+        status: supabaseResult.success ? 'success' : 'failed',
+        requestBody: JSON.stringify({
+          target: 'supabase',
+          url: supabaseConfig.url,
+          record: {
+            id: notification.id,
+            app_name: notification.appName,
+            title: notification.title,
+            message: notification.message,
+            prefix: notification.prefix,
+          },
+        }),
+        responseBody: supabaseResult.recordId
+          ? `Record ID: ${supabaseResult.recordId}`
+          : undefined,
+        errorMessage: supabaseResult.error || undefined,
       })
 
       if (supabaseResult.success) {
@@ -293,32 +291,24 @@ export async function autoPushNotification(notification: {
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error'
-      await db.pushLog.create({
-        data: {
-          notificationId: notification.id,
-          status: 'failed',
-          requestBody: JSON.stringify({ target: 'supabase', error: errorMessage }),
-          errorMessage,
-        },
+      await createPushLog({
+        notificationId: notification.id,
+        status: 'failed',
+        requestBody: JSON.stringify({ target: 'supabase', error: errorMessage }),
+        errorMessage,
       })
     }
   }
 
   // Update the notification push status based on results
   if (anySuccess) {
-    await db.notification.update({
-      where: { id: notification.id },
-      data: {
-        isPushed: true,
-        pushStatus: 'success',
-      },
+    await updateNotification(notification.id, {
+      isPushed: true,
+      pushStatus: 'success',
     })
   } else if (anyAttempt) {
-    await db.notification.update({
-      where: { id: notification.id },
-      data: {
-        pushStatus: 'failed',
-      },
+    await updateNotification(notification.id, {
+      pushStatus: 'failed',
     })
   }
 
