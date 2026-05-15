@@ -3,6 +3,7 @@ import {
   getNotifications,
   createNotification,
   getActiveFilterRules,
+  deleteAllNotifications,
 } from '@/lib/supabase-db'
 import { autoPushNotification } from '@/lib/auto-push'
 import { emitWsEvent } from '@/lib/ws-client'
@@ -96,6 +97,27 @@ export async function POST(request: NextRequest) {
     console.error('Error creating notification:', error)
     return NextResponse.json(
       { error: 'Failed to create notification' },
+      { status: 500 }
+    )
+  }
+}
+
+// DELETE /api/notifications - Delete all notifications (clear all)
+export async function DELETE() {
+  try {
+    const deletedCount = await deleteAllNotifications()
+
+    // Emit event
+    emitWsEvent('notifications:cleared', { count: deletedCount })
+
+    return NextResponse.json({
+      message: `Cleared ${deletedCount} notifications`,
+      deletedCount,
+    })
+  } catch (error) {
+    console.error('Error clearing notifications:', error)
+    return NextResponse.json(
+      { error: 'Failed to clear notifications' },
       { status: 500 }
     )
   }

@@ -181,6 +181,9 @@ export default function Home() {
   // Database status
   const [dbStatus, setDbStatus] = useState<'supabase' | 'unknown'>('unknown')
 
+  // Clear all confirmation dialog
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
+
   // ── Data Fetching ──────────────────────────────────────────────────────
 
   const fetchNotifications = useCallback(async () => {
@@ -314,6 +317,12 @@ export default function Home() {
       toast.info(`${data.count ?? 0} new notifications received`)
     })
 
+    socket.on('notifications:cleared', (data: { count?: number }) => {
+      fetchNotifications()
+      fetchPushLogs()
+      toast.info(`Cleared ${data.count ?? 0} notifications`)
+    })
+
     return () => {
       socket.disconnect()
       socketRef.current = null
@@ -360,6 +369,59 @@ export default function Home() {
         await fetchPushLogs()
       } else {
         toast.error('Failed to push notifications')
+      }
+    } catch {
+      toast.error('Failed to connect to server')
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const handlePushAndClearAll = async () => {
+    setClearConfirmOpen(false)
+    setActionLoading('pushclear')
+    try {
+      // Step 1: Push all filtered notifications first
+      const pushRes = await fetch('/api/notifications/push', { method: 'POST' })
+      if (pushRes.ok) {
+        const pushData = await pushRes.json()
+        if (pushData.total > 0) {
+          toast.success(
+            `Pushed: ${pushData.success ?? 0} success, ${pushData.failed ?? 0} failed`
+          )
+        }
+      }
+
+      // Step 2: Clear all notifications
+      const clearRes = await fetch('/api/notifications', { method: 'DELETE' })
+      if (clearRes.ok) {
+        const clearData = await clearRes.json()
+        toast.success(`Cleared ${clearData.deletedCount ?? 0} notifications`)
+        setNotifications([])
+      } else {
+        toast.error('Failed to clear notifications')
+      }
+
+      await fetchNotifications()
+      await fetchPushLogs()
+    } catch {
+      toast.error('Failed to connect to server')
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const handleClearAll = async () => {
+    setClearConfirmOpen(false)
+    setActionLoading('clear')
+    try {
+      const res = await fetch('/api/notifications', { method: 'DELETE' })
+      if (res.ok) {
+        const data = await res.json()
+        toast.success(`Cleared ${data.deletedCount ?? 0} notifications`)
+        setNotifications([])
+      } else {
+        toast.error('Failed to clear notifications')
       }
     } catch {
       toast.error('Failed to connect to server')
@@ -834,6 +896,22 @@ export default function Home() {
                   >
                     <Check className="size-3.5" />
                     Mark All Read
+                  </Button>
+                )}
+                {notifications.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setClearConfirmOpen(true)}
+                    disabled={actionLoading === 'pushclear' || actionLoading === 'clear'}
+                    className="gap-1.5 text-red-600 hover:text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:text-red-300 dark:hover:bg-red-950/30 border-red-200 dark:border-red-800"
+                  >
+                    <Trash2
+                      className={`size-3.5 ${
+                        actionLoading === 'pushclear' || actionLoading === 'clear' ? 'animate-pulse' : ''
+                      }`}
+                    />
+                    Clear All
                   </Button>
                 )}
               </div>
@@ -1489,6 +1567,65 @@ export default function Home() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Clear All Confirmation Dialog ─────────────────────────────────── */}
+      <Dialog open={clearConfirmOpen} onOpenChange={setClearConfirmOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Trash2 className="size-5 text-red-500" />
+              Clear All Notifications
+            </DialogTitle>
+            <DialogDescription>
+              This will first push all filtered notifications to your configured endpoints, then delete all notifications from the list. Push logs will be preserved.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 py-2">
+            <div className="bg-muted/50 rounded-lg p-3 space-y-1.5">
+              <div className="flex items-center gap-2 text-sm">
+                <Send className="size-4 text-emerald-600" />
+                <span>Push all filtered notifications first</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <Trash2 className="size-4 text-red-500" />
+                <span>Delete all notifications</span>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {notifications.length} notification{notifications.length !== 1 ? 's' : ''} will be cleared.
+              This action cannot be undone.
+            </p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setClearConfirmOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleClearAll}
+              disabled={actionLoading === 'clear'}
+              className="gap-1.5"
+            >
+              <Trash2 className="size-3.5" />
+              Clear Only
+            </Button>
+            <Button
+              size="sm"
+              onClick={handlePushAndClearAll}
+              disabled={actionLoading === 'pushclear'}
+              className="bg-emerald-600 hover:bg-emerald-700 gap-1.5"
+            >
+              <Send className="size-3.5" />
+              Push &amp; Clear
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

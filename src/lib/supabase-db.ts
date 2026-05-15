@@ -536,6 +536,31 @@ export async function deleteNotification(id: string): Promise<void> {
   if (error) throw new Error(error.message)
 }
 
+export async function deleteAllNotifications(): Promise<number> {
+  const client = getSupabaseClient()
+
+  // Delete push logs first (they reference notifications via FK)
+  const { error: logError } = await client
+    .from('push_logs')
+    .delete()
+    .neq('id', '') // delete all rows
+
+  if (logError) {
+    console.warn('[SupabaseDB] Error clearing push logs:', logError.message)
+  }
+
+  // Delete all notifications
+  const { data, error } = await client
+    .from('notifications')
+    .delete()
+    .neq('id', '') // delete all rows
+    .select('id')
+
+  if (error) throw new Error(error.message)
+
+  return data?.length ?? 0
+}
+
 // ─── Filter Rules ──────────────────────────────────────────────────────────
 
 export async function getFilterRules(): Promise<any[]> {
