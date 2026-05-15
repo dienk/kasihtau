@@ -4,55 +4,10 @@
 Implemented a comprehensive Supabase database setup system for the kasihtau notification filtering/pushing app, enabling users to create required tables in their Supabase PostgreSQL database via the UI.
 
 ## Changes Made
-
-### 1. New API: `src/app/api/settings/supabase/create-tables/route.ts`
-- **POST endpoint** that accepts an optional `serviceRoleKey` or `dbPassword` in the request body
-- First checks if tables already exist via `testSupabaseDbConnection()`
-- If `serviceRoleKey` is provided, attempts to create tables via Supabase Management API
-- If `dbPassword` is provided, tries direct PostgreSQL connection
-- If automatic methods fail, returns the SQL for manual execution
-- Returns `{ ok, tablesCreated, sql?, sqlEditorLink, message }`
-
-### 2. Updated API: `src/app/api/settings/supabase/setup/route.ts`
-- Added `sqlEditorLink` to all responses
-- Added smart error detection for missing tables
-- Now uses `markSupabaseTablesReady()` to track table readiness
-
-### 3. Updated API: `src/app/api/settings/supabase/test/route.ts`
-- Now uses `markSupabaseTablesReady()` to track table readiness
-- Updates `tablesReady` flag based on test results
-
-### 4. Updated API: `src/app/api/settings/supabase/route.ts`
-- Now returns `tablesReady` flag in GET response
-- Handles `tablesReady` in POST response
-
-### 5. Updated Core: `src/lib/supabase-db.ts`
-- Added `tablesReady` field to `SupabaseDbConfig` interface
-- `getSupabaseClient()` now requires `tablesReady: true` to use Supabase
-- Added `getSupabaseClientRaw()` for setup/verify operations (bypasses tablesReady check)
-- Added `markSupabaseTablesReady()` function
-- Added `isSupabaseReady()` function
-- `saveSupabaseDbConfig()` now checks table existence and sets `tablesReady`
-- `testSupabaseDbConnection()` now uses `getSupabaseClientRaw()` to bypass tablesReady check
-- Better error detection for missing tables (PGRST205, "schema cache" errors)
-
-### 6. Updated Frontend: `src/app/page.tsx`
-- Updated `fetchSupabaseConfig` to handle `tablesReady` flag
-- Updated `handleSaveSupabase` to check `tablesReady` in response
-- Updated `handleVerifySupabaseTables` to update `dbStatus` and refresh data
-- Default anon key updated to new key
-- Full setup UI with banners, collapsible SQL, verify button, SQL Editor link
-
-### 7. Configuration Updates
-- `.env`: Updated with new Supabase URL and publishable key
-- `data/supabase-config.json`: Updated with new credentials, `tablesReady: false`
-
-## Testing
-- App works correctly with SQLite fallback when Supabase tables don't exist
-- Supabase config API returns `tablesReady: false`
-- Notifications, filter rules, push configs, and push logs all work via Prisma/SQLite
-- Simulate endpoint creates test notifications successfully
-- Lint passes with no errors
+- Created Supabase database client utility
+- Added setup SQL for table creation
+- Added Supabase config management (save, test, verify)
+- Updated frontend with Supabase setup UI
 
 ---
 
@@ -61,28 +16,67 @@ Implemented a comprehensive Supabase database setup system for the kasihtau noti
 ## Summary
 Verified and completed the removal of all Airtable integration code. Supabase PostgreSQL is now the sole database for the kasihtau app.
 
-## Verification Results
-- ✅ **No Airtable references found** anywhere in the codebase (grep returned 0 results)
-- ✅ **Supabase packages installed**: `@supabase/supabase-js` v2.105.4, `@supabase/ssr` v0.10.3
-- ✅ **All API routes use `@/lib/supabase-db`** (not Prisma, not Airtable)
-- ✅ **`.env` has Supabase credentials**, no AIRTABLE_TOKEN
-- ✅ **`prisma/schema.prisma`** is PostgreSQL, no AirtableConfig model
-- ✅ **`auto-push.ts`** uses supabase-db, no Airtable
-- ✅ **Supabase tables exist** and are verified (`tablesReady: true`)
-
 ## Fixes Applied
-1. **Fixed `next.config.ts`**: Removed `output: "standalone"` (caused dev server crashes), added `serverExternalPackages` for socket.io-client and @supabase/supabase-js
-2. **Fixed data directory permissions**: Removed stale `supabase-config.json` that was owned by root
-3. **Made `getPushLogs()` resilient**: Added fallback for join query failures, returns empty array on error
-4. **Made push-logs API route resilient**: Returns empty array instead of 500 error on failure
+1. Removed `output: "standalone"` from next.config.ts (caused dev server crashes)
+2. Fixed data directory permissions
+3. Made `getPushLogs()` resilient with fallback
+4. Made push-logs API return empty array instead of 500
 
-## API Test Results
-All APIs working with Supabase:
-- GET /api/notifications → Returns notifications from Supabase ✅
-- POST /api/notifications → Creates notification with auto-filter ✅
-- POST /api/notifications/simulate → Generates test notifications ✅
-- GET/POST /api/settings/filter-rules → Filter rules CRUD ✅
-- GET/POST /api/settings/push-config → Push config CRUD ✅
-- GET /api/push-logs → Push logs (resilient) ✅
-- GET/POST /api/settings/supabase → Supabase config management ✅
-- POST /api/settings/supabase/setup → Table setup/verification ✅
+---
+
+# Task 3: Fix Deployment Issues
+
+## Summary
+Resolved critical deployment issues that prevented the app from building and running in production.
+
+## Root Causes
+1. **`supabase-db.ts` used `fs` and `path` modules** - These break in serverless/edge environments and cause bundling issues
+2. **`ws-client.ts` imported `socket.io-client` server-side** - Heavy dependency causing memory issues with Turbopack
+3. **Complex Supabase setup UI** - Required runtime config persistence via filesystem
+4. **Missing `output: "standalone"`** - Needed for proper deployment
+
+## Changes Made
+
+### 1. `src/lib/supabase-db.ts` - Removed fs/path dependencies
+- Removed `import { join } from 'path'` and `import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'`
+- Config now reads exclusively from environment variables (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`)
+- `writeConfig()` only updates in-memory cache (no filesystem writes)
+- `readConfig()` reads from env vars only (no JSON file fallback)
+
+### 2. `src/lib/ws-client.ts` - Replaced socket.io-client with HTTP fetch
+- Removed `import { io } from 'socket.io-client'`
+- Now uses simple `fetch()` to `http://localhost:{WS_PORT}/emit` endpoint
+- Avoids bundling the heavy socket.io-client on the server side
+- Fire-and-forget pattern for best-effort event emission
+
+### 3. `mini-services/notify-ws/index.ts` - Added HTTP emit endpoint
+- Added `/emit` POST endpoint to the WebSocket service
+- Accepts `{ event, data }` JSON body and broadcasts to connected clients
+- Maintains backward compatibility with WebSocket connections
+
+### 4. `next.config.ts` - Restored standalone output
+- Restored `output: "standalone"` for proper deployment builds
+- Kept `serverExternalPackages: ["@supabase/supabase-js"]`
+- Removed `socket.io-client` from serverExternalPackages
+
+### 5. `src/app/page.tsx` - Simplified Supabase UI
+- Removed all Supabase setup/verification handlers (~200 lines)
+- Removed Supabase configuration form UI (~230 lines)
+- Kept `dbStatus` indicator in header showing "Supabase" when configured
+- Simplified `fetchDbStatus` to just check if Supabase is configured
+
+### 6. `src/app/api/settings/supabase/route.ts` - Simplified
+- Only GET method returning `{ isConfigured, tablesReady }`
+- Removed POST/PATCH/DELETE methods (no runtime config needed)
+- Deleted `setup/route.ts` (tables pre-configured in Supabase)
+
+## Test Results
+All APIs working with Supabase PostgreSQL:
+- ✅ GET /api/notifications - Returns 15 notifications
+- ✅ POST /api/notifications/simulate - Creates test notifications with auto-filter
+- ✅ GET /api/settings/filter-rules - Returns 2 active rules ([ALERT], [URGENT])
+- ✅ GET /api/settings/push-config - Returns 1 active push config
+- ✅ GET /api/push-logs - Returns push logs with successful httpbin.org responses
+- ✅ GET /api/settings/supabase - Returns {isConfigured: true, tablesReady: true}
+- ✅ Dev server stable after all API calls
+- ✅ Lint passes with zero errors
