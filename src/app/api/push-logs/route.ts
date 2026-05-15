@@ -19,9 +19,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(logs)
   } catch (error) {
     console.error('Error fetching push logs:', error)
-    return NextResponse.json(
-      { error: 'Failed to fetch push logs' },
-      { status: 500 }
-    )
+    // Return empty array instead of error to prevent frontend crashes
+    return NextResponse.json([])
   }
 }

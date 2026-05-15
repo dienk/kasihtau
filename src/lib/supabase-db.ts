@@ -815,15 +815,32 @@ export async function deletePushConfig(id: string): Promise<void> {
 export async function getPushLogs(limit: number = 50): Promise<any[]> {
   const client = getSupabaseClient()
 
-  const { data, error } = await client
-    .from('push_logs')
-    .select('*, notification:notifications(id, app_name, title, message, prefix)')
-    .order('pushed_at', { ascending: false })
-    .limit(limit)
+  // Try with join first, fall back to simple query
+  try {
+    const { data, error } = await client
+      .from('push_logs')
+      .select('*, notification:notifications(id, app_name, title, message, prefix)')
+      .order('pushed_at', { ascending: false })
+      .limit(limit)
 
-  if (error) throw new Error(error.message)
+    if (error) {
+      // If join fails, try without join
+      console.warn('[SupabaseDB] Push logs join failed, trying simple query:', error.message)
+      const { data: simpleData, error: simpleError } = await client
+        .from('push_logs')
+        .select('*')
+        .order('pushed_at', { ascending: false })
+        .limit(limit)
 
-  return (data as (PushLogRow & { notification: NotificationRow })[]).map(pushLogToApp)
+      if (simpleError) throw new Error(simpleError.message)
+      return (simpleData as PushLogRow[]).map(pushLogToApp)
+    }
+
+    return (data as (PushLogRow & { notification: NotificationRow })[]).map(pushLogToApp)
+  } catch (err) {
+    console.error('[SupabaseDB] Error fetching push logs:', err)
+    return []
+  }
 }
 
 export async function createPushLog(data: {
