@@ -4,14 +4,18 @@
 // Note: The app uses Supabase PostgreSQL via the client SDK (@supabase/supabase-js)
 // directly (see src/lib/supabase-db.ts). This Prisma schema is kept for reference
 // and is not actively used for database operations.
+//
+// The DATABASE_URL env var is needed for `prisma generate` but doesn't need
+// to point to a real database - only the Supabase URL/key are used at runtime.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL")
 }
 
 model Notification {
