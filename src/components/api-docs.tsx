@@ -17,6 +17,7 @@ import {
   Radio,
   Database,
 } from 'lucide-react'
+import { CatLogo } from '@/components/cat-logo'
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -559,7 +560,7 @@ export function ApiDocs() {
         <div>
           <div className="flex items-center gap-2 mb-2">
             <div className="flex items-center justify-center size-8 rounded-2xl bg-gradient-to-br from-emerald-400 to-emerald-600 text-white shadow-md shadow-emerald-200 dark:shadow-emerald-900/30">
-              <Globe className="size-4" />
+              <CatLogo className="size-5" />
             </div>
             <h2 className="text-xl font-bold tracking-tight">API Documentation</h2>
           </div>
