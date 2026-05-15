@@ -1,22 +1,23 @@
 ---
 Task ID: 1
 Agent: Main
-Task: Fix filter rule functionality and push to GitHub
+Task: Connect app to Airtable (https://airtable.com/appS02vV9NX6QERC7)
 
 Work Log:
-- Read all project files to understand current state of NotifyPush app
-- Identified key bug: auto-push.ts only pushed to the FIRST active push config, not all
-- Fixed auto-push.ts to iterate over ALL active push configs when pushing
-- Fixed notifications/push/route.ts to also push to all active configs
-- Each push config now gets its own push log entry for proper tracking
-- Cleaned up .gitignore: added db/*.db, agent-ctx/, examples/, .zscripts/
-- Removed sensitive/internal files from git tracking (.env, db/custom.db, skills/, etc.)
-- Committed changes with proper messages
-- Added remote origin: https://github.com/dienk/kasihtau.git
-- Could not push due to missing GitHub authentication credentials
+- Validated Airtable PAT token via /v0/meta/whoami endpoint
+- Created "Notifications" table in Airtable base with fields: AppName, Title, Message, Prefix, FilteredAt, Timestamp, NotifId
+- Tested inserting records to Airtable - confirmed working
+- Added AirtableConfig model to Prisma schema
+- Created /src/lib/airtable.ts with pushToAirtable() and testAirtableConnection() functions
+- Created /src/app/api/settings/airtable/route.ts (GET, POST, DELETE for config CRUD)
+- Created /src/app/api/settings/airtable/test/route.ts (POST for connection test)
+- Updated /src/lib/auto-push.ts to also push to Airtable when configured
+- Seeded Airtable config in database (baseId: appS02vV9NX6QERC7, table: Notifications)
+- Updated frontend page.tsx with Airtable Integration section in Settings tab
+- Tested end-to-end: Created notification with [URGENT] prefix → auto-filtered → auto-pushed to Airtable (success)
 
 Stage Summary:
-- Filter rule fix: auto-push now pushes to ALL active push configs (not just first)
-- Repository cleaned: 87 tracked files, no sensitive data
-- Remote configured: origin -> https://github.com/dienk/kasihtau.git
-- Push requires GitHub authentication (Personal Access Token or SSH key)
+- Airtable integration fully functional
+- Filtered notifications automatically push to Airtable as new records
+- UI shows Airtable connection status with Test/Connect/Update/Delete controls
+- Push logs track both webhook and Airtable push results

@@ -28,6 +28,7 @@ import {
   Wifi,
   WifiOff,
   Radio,
+  Database,
 } from 'lucide-react'
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -174,6 +175,22 @@ export default function Home() {
   const [newConfigMethod, setNewConfigMethod] = useState<'POST' | 'GET'>('POST')
   const [newConfigHeaders, setNewConfigHeaders] = useState('')
 
+  // Airtable integration state
+  const [airtableConfig, setAirtableConfig] = useState<{
+    id: string
+    baseUrl: string
+    baseId: string
+    token: string
+    tableName: string
+    isActive: boolean
+  } | null>(null)
+  const [atBaseUrl, setAtBaseUrl] = useState('https://airtable.com/appS02vV9NX6QERC7')
+  const [atBaseId, setAtBaseId] = useState('appS02vV9NX6QERC7')
+  const [atToken, setAtToken] = useState('')
+  const [atTableName, setAtTableName] = useState('Notifications')
+  const [atTesting, setAtTesting] = useState(false)
+  const [atSaving, setAtSaving] = useState(false)
+
   // ── Data Fetching ──────────────────────────────────────────────────────
 
   const fetchNotifications = useCallback(async () => {
@@ -224,6 +241,23 @@ export default function Home() {
     }
   }, [])
 
+  const fetchAirtableConfig = useCallback(async () => {
+    try {
+      const res = await fetch('/api/settings/airtable')
+      if (res.ok) {
+        const data = await res.json()
+        if (data.length > 0) {
+          setAirtableConfig(data[0])
+          setAtBaseUrl(data[0].baseUrl)
+          setAtBaseId(data[0].baseId)
+          setAtTableName(data[0].tableName)
+        }
+      }
+    } catch {
+      // API not yet available
+    }
+  }, [])
+
   const fetchAll = useCallback(async () => {
     setLoading(true)
     await Promise.all([
@@ -231,9 +265,10 @@ export default function Home() {
       fetchFilterRules(),
       fetchPushConfigs(),
       fetchPushLogs(),
+      fetchAirtableConfig(),
     ])
     setLoading(false)
-  }, [fetchNotifications, fetchFilterRules, fetchPushConfigs, fetchPushLogs])
+  }, [fetchNotifications, fetchFilterRules, fetchPushConfigs, fetchPushLogs, fetchAirtableConfig])
 
   useEffect(() => {
     fetchAll()
@@ -526,6 +561,107 @@ export default function Home() {
         setPushConfigs((prev) => prev.filter((c) => c.id !== id))
       } else {
         toast.error('Failed to delete push config')
+      }
+    } catch {
+      toast.error('Failed to connect to server')
+    }
+  }
+
+  // ── Airtable Actions ────────────────────────────────────────────────────
+
+  const handleSaveAirtable = async () => {
+    if (!atBaseId.trim() || !atToken.trim() || !atTableName.trim()) {
+      toast.error('Please fill in all Airtable fields')
+      return
+    }
+    setAtSaving(true)
+    try {
+      const res = await fetch('/api/settings/airtable', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseUrl: atBaseUrl.trim(),
+          baseId: atBaseId.trim(),
+          token: atToken.trim(),
+          tableName: atTableName.trim(),
+        }),
+      })
+      if (res.ok) {
+        toast.success(airtableConfig ? 'Airtable config updated!' : 'Airtable connected!')
+        setAtToken('')
+        await fetchAirtableConfig()
+      } else {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data.error || 'Failed to save Airtable config')
+      }
+    } catch {
+      toast.error('Failed to connect to server')
+    } finally {
+      setAtSaving(false)
+    }
+  }
+
+  const handleTestAirtable = async () => {
+    setAtTesting(true)
+    try {
+      const res = await fetch('/api/settings/airtable/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        toast.success(data.message || 'Airtable connection successful!')
+      } else {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data.error || 'Airtable connection failed')
+      }
+    } catch {
+      toast.error('Failed to test Airtable connection')
+    } finally {
+      setAtTesting(false)
+    }
+  }
+
+  const handleToggleAirtable = async (checked: boolean) => {
+    if (!airtableConfig) return
+    try {
+      const res = await fetch('/api/settings/airtable', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseUrl: airtableConfig.baseUrl,
+          baseId: airtableConfig.baseId,
+          token: airtableConfig.token,
+          tableName: airtableConfig.tableName,
+          isActive: checked,
+        }),
+      })
+      if (res.ok) {
+        setAirtableConfig((prev) => prev ? { ...prev, isActive: checked } : null)
+        toast.success(checked ? 'Airtable integration enabled' : 'Airtable integration disabled')
+      } else {
+        toast.error('Failed to update Airtable config')
+      }
+    } catch {
+      toast.error('Failed to connect to server')
+    }
+  }
+
+  const handleDeleteAirtable = async () => {
+    if (!airtableConfig) return
+    try {
+      const res = await fetch('/api/settings/airtable', {
+        method: 'DELETE',
+      })
+      if (res.ok) {
+        toast.success('Airtable config deleted')
+        setAirtableConfig(null)
+        setAtBaseUrl('https://airtable.com/appS02vV9NX6QERC7')
+        setAtBaseId('appS02vV9NX6QERC7')
+        setAtToken('')
+        setAtTableName('Notifications')
+      } else {
+        toast.error('Failed to delete Airtable config')
       }
     } catch {
       toast.error('Failed to connect to server')
@@ -1054,6 +1190,135 @@ export default function Home() {
                       )
                     })}
                   </div>
+                )}
+              </section>
+
+              <Separator />
+
+              {/* Airtable Integration Section */}
+              <section>
+                <div className="flex items-center gap-2 mb-4">
+                  <Database className="size-5 text-emerald-600" />
+                  <h2 className="text-lg font-semibold">Airtable Integration</h2>
+                  {airtableConfig?.isActive && (
+                    <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0 text-xs gap-1">
+                      <Zap className="size-3" />
+                      Connected
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Push filtered notifications to your Airtable base automatically. Each filtered notification creates a new record with app name, title, message, and prefix.
+                </p>
+
+                {/* Airtable Config Form */}
+                <Card className="py-0 gap-0 mb-4">
+                  <CardContent className="p-4 space-y-3">
+                    <div className="grid gap-3">
+                      <div className="grid grid-cols-[1fr_1fr] gap-2">
+                        <div>
+                          <label className="text-xs font-medium text-muted-foreground mb-1 block">Base ID</label>
+                          <Input
+                            placeholder="appXXXXXXXXXXXXXXX"
+                            value={atBaseId}
+                            onChange={(e) => setAtBaseId(e.target.value)}
+                            className="h-9 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-medium text-muted-foreground mb-1 block">Table Name</label>
+                          <Input
+                            placeholder="Notifications"
+                            value={atTableName}
+                            onChange={(e) => setAtTableName(e.target.value)}
+                            className="h-9 text-sm"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-muted-foreground mb-1 block">Personal Access Token</label>
+                        <Input
+                          type="password"
+                          placeholder="pat..."
+                          value={atToken}
+                          onChange={(e) => setAtToken(e.target.value)}
+                          className="h-9 text-sm"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-muted-foreground">
+                        {airtableConfig
+                          ? `Connected to ${airtableConfig.baseId} → ${airtableConfig.tableName}`
+                          : 'Enter your Airtable credentials to connect'}
+                      </p>
+                      <div className="flex gap-2">
+                        {airtableConfig && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleTestAirtable}
+                            disabled={atTesting}
+                            className="gap-1.5"
+                          >
+                            <RefreshCw className={`size-3.5 ${atTesting ? 'animate-spin' : ''}`} />
+                            Test
+                          </Button>
+                        )}
+                        <Button
+                          onClick={handleSaveAirtable}
+                          disabled={atSaving}
+                          className="bg-emerald-600 hover:bg-emerald-700 gap-1.5"
+                          size="sm"
+                        >
+                          <Plus className="size-4" />
+                          {airtableConfig ? 'Update' : 'Connect'}
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Connection Status Card */}
+                {airtableConfig && (
+                  <Card className="py-0 gap-0">
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Switch
+                            checked={airtableConfig.isActive}
+                            onCheckedChange={(checked) => handleToggleAirtable(checked)}
+                            className="data-[state=checked]:bg-emerald-600"
+                          />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <code className="text-sm font-mono font-medium bg-muted px-1.5 py-0.5 rounded">
+                                {airtableConfig.baseId}
+                              </code>
+                              <span className="text-muted-foreground text-sm">→</span>
+                              <code className="text-sm font-mono bg-muted px-1.5 py-0.5 rounded">
+                                {airtableConfig.tableName}
+                              </code>
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              <a href={airtableConfig.baseUrl} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">
+                                Open in Airtable ↗
+                              </a>
+                            </p>
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:text-destructive shrink-0"
+                          onClick={handleDeleteAirtable}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
                 )}
               </section>
 

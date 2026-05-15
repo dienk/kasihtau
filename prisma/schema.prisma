@@ -59,3 +59,14 @@ model PushLog {
   notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
   pushConfig   PushConfig?  @relation(fields: [pushConfigId], references: [id], onDelete: SetNull)
 }
+
+model AirtableConfig {
+  id        String   @id @default(cuid())
+  baseUrl   String   // e.g. https://airtable.com/appS02vV9NX6QERC7
+  baseId    String   // e.g. appS02vV9NX6QERC7
+  token     String   // Personal Access Token
+  tableName String   @default("Notifications") // Table name in Airtable
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
