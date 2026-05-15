@@ -80,3 +80,53 @@ All APIs working with Supabase PostgreSQL:
 - ✅ GET /api/settings/supabase - Returns {isConfigured: true, tablesReady: true}
 - ✅ Dev server stable after all API calls
 - ✅ Lint passes with zero errors
+
+---
+
+# Task 4: Fix Deployment Failure (Vercel/Serverless Compatibility)
+
+## Summary
+Fixed critical deployment issues preventing the app from deploying to Vercel or other serverless platforms.
+
+## Root Causes
+1. **`output: "standalone"` in next.config.ts** - Not compatible with Vercel deployment (Vercel has its own build system)
+2. **Build script assumed standalone output** - `cp -r .next/static .next/standalone/.next/` fails without standalone
+3. **Prisma `DATABASE_URL` required at build time** - Placeholder URL was invalid, causing `prisma generate` to fail
+4. **WebSocket service not serverless-compatible** - `ws-client.ts` tried to connect to localhost WS in serverless environments
+5. **Missing `postinstall` script** - `prisma generate` wasn't running during deployment build
+
+## Changes Made
+
+### 1. `next.config.ts` - Removed standalone output
+- Removed `output: "standalone"` (Vercel doesn't need it, and it caused crashes)
+- Added `sharp` to `serverExternalPackages`
+- Added `images.remotePatterns` for flexibility
+
+### 2. `package.json` - Fixed build and start scripts
+- Changed build script from `next build && cp -r ...` to just `next build`
+- Changed start script from `bun .next/standalone/server.js` to `next start`
+- Added `"postinstall": "prisma generate"` to ensure Prisma client is generated during deployment
+
+### 3. `prisma/schema.prisma` - Added directUrl
+- Added `directUrl = env("DATABASE_URL")` for better connection handling
+- Updated comments to clarify the schema is only for reference/generate
+
+### 4. `.env` - Fixed DATABASE_URL
+- Changed from invalid placeholder `[YOUR_DB_PASSWORD]` to `postgresql://placeholder:placeholder@localhost:5432/placeholder`
+- This allows `prisma generate` to succeed without a real database connection
+
+### 5. `src/lib/ws-client.ts` - Serverless compatibility
+- Added `isServerless()` check that detects Vercel, AWS Lambda, Netlify environments
+- WebSocket events are silently skipped in serverless environments (no persistent WS service available)
+- Real-time updates fall back to polling in serverless deployments
+
+### 6. `.env.example` - Added documentation
+- Created comprehensive env var documentation with comments
+- Clarified which vars are required vs optional
+
+## Test Results
+- ✅ `prisma generate` succeeds with placeholder DATABASE_URL
+- ✅ `next build` completes successfully (11 routes)
+- ✅ Dev server starts and all API routes work
+- ✅ WebSocket service running on port 3003
+- ✅ Pushed to GitHub: commit b339326
