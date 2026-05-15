@@ -1,33 +1,35 @@
 ---
 Task ID: 1
 Agent: Main Agent
-Task: Move database from SQLite to Supabase PostgreSQL
+Task: Install @supabase/supabase-js and @supabase/ssr packages
 
 Work Log:
-- Read all existing project files (prisma schema, .env, package.json, all API routes, frontend page)
-- Researched Supabase publishable key format via web search
-- Created comprehensive Supabase database service (lib/supabase-db.ts) with:
-  - Full CRUD operations for all models (Notifications, FilterRules, PushConfigs, PushLogs, AirtableConfig)
-  - Snake_case ↔ camelCase converters for Supabase table ↔ app model mapping
-  - Config management via local JSON file with in-memory cache
-  - Supabase client singleton with dynamic reconfiguration
-  - SQL setup script for creating tables in Supabase
-  - Graceful fallback to Prisma/SQLite when Supabase is not configured
-- Updated all 12 API route files to use the new Supabase database service
-- Created missing API routes (airtable/test, supabase/test)
-- Updated auto-push module to use the new database service
-- Updated frontend (page.tsx) with:
-  - Pre-filled publishable key (sb_publishable_a9GeIbcAeBuqx3bHZgHRiw_aXrLd8Ou)
-  - Database status indicator in header (Supabase/Local DB)
-  - Supabase Database section in Settings with setup SQL display
-  - Copy SQL button for table creation
-  - Auto-refresh data when switching databases
-- Fixed TypeScript errors in API routes
-- Fixed fs import issues with Turbopack by using lazy require()
+- Installed @supabase/supabase-js and @supabase/ssr via npm
+- Packages added to package.json successfully
 
 Stage Summary:
-- All API routes now use Supabase when configured, falling back to SQLite when not
-- Frontend shows database status and provides setup flow for Supabase
-- Publishable key is pre-filled in the connection form
-- User needs to provide Supabase Project URL and create tables via SQL Editor
-- The app currently uses SQLite as fallback and is fully functional
+- Both Supabase packages installed: @supabase/supabase-js@^2.105.4, @supabase/ssr@^0.10.3
+
+---
+Task ID: 2
+Agent: Main Agent
+Task: Fix lint errors and configure Supabase database migration
+
+Work Log:
+- Fixed ESLint errors in src/lib/supabase-db.ts: replaced require() imports with ES module imports (path, fs)
+- Updated .env with Supabase configuration placeholders and instructions
+- Updated data/supabase-config.json with pre-filled publishable key
+- Added PostgreSQL migration instructions to prisma/schema.prisma comments
+- Ran lint check - all errors resolved
+- Verified app works with SQLite fallback (notifications API returns data correctly)
+- Built production version successfully
+- Pushed all changes to GitHub (https://github.com/dienk/kasihtau.git)
+
+Stage Summary:
+- Lint passes clean
+- App works with SQLite fallback database
+- Supabase integration code is already fully built (dual mode: Supabase Client SDK + Prisma/SQLite fallback)
+- Missing: Supabase Project URL (cannot be derived from publishable key alone)
+- The sb_publishable_ key is a newer Supabase format that replaces the anon key, but requires the project URL separately
+- User needs to provide their Supabase Project URL from dashboard (Settings → API) to activate Supabase as primary database
+- Changes pushed to GitHub commit eea9d08
